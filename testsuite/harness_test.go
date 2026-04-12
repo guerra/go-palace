@@ -221,6 +221,9 @@ func TestB004_InitYes(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "mempalace.yaml")); err != nil {
 		t.Errorf("yaml not written: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(dir, "entities.json")); err != nil {
+		t.Errorf("entities.json not written: %v", err)
+	}
 }
 
 func TestB005_InitYesIdempotent(t *testing.T) {

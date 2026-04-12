@@ -15,6 +15,7 @@ import (
 	"go-palace/internal/config"
 	"go-palace/internal/convominer"
 	"go-palace/internal/embed"
+	"go-palace/internal/entity"
 	"go-palace/internal/layers"
 	"go-palace/internal/miner"
 	"go-palace/internal/palace"
@@ -92,6 +93,16 @@ func newInitCmd() *cobra.Command {
 			for _, r := range rooms {
 				fmt.Fprintf(cmd.OutOrStdout(), "    ROOM: %s\n          %s\n", r.Name, r.Description)
 			}
+			// Entity detection
+			files, scanErr := entity.ScanForDetection(absDir, 10)
+			var confirmedPeople, confirmedProjects []string
+			if scanErr == nil && len(files) > 0 {
+				detected := entity.Detect(files, 10)
+				if len(detected.People) > 0 || len(detected.Projects) > 0 || len(detected.Uncertain) > 0 {
+					confirmedPeople, confirmedProjects = entity.Confirm(detected, yes, cmd.OutOrStdout(), cmd.InOrStdin())
+				}
+			}
+
 			fmt.Fprintf(cmd.OutOrStdout(), "\n%s\n", rule)
 
 			if !yes {
@@ -101,6 +112,16 @@ func newInitCmd() *cobra.Command {
 			}
 			if err := room.SaveConfig(absDir, wing, rooms); err != nil {
 				return fmt.Errorf("init: save: %w", err)
+			}
+			if len(confirmedPeople) > 0 || len(confirmedProjects) > 0 {
+				if err := entity.SaveEntities(absDir, confirmedPeople, confirmedProjects); err != nil {
+					return fmt.Errorf("init: save entities: %w", err)
+				}
+			} else {
+				// Write empty entities.json so downstream tools know detection ran
+				if err := entity.SaveEntities(absDir, nil, nil); err != nil {
+					return fmt.Errorf("init: save entities: %w", err)
+				}
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "\n  Config saved: %s\n",
 				filepath.Join(absDir, "mempalace.yaml"))

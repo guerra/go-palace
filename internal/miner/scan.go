@@ -24,6 +24,7 @@ var (
 		"mempalace.yml":     {},
 		"mempal.yaml":       {},
 		"mempal.yml":        {},
+		"entities.json":     {},
 		".gitignore":        {},
 		"package-lock.json": {},
 	}
