@@ -154,3 +154,53 @@ func TestCompressionStats(t *testing.T) {
 			stats.OriginalTokensEst, stats.SummaryTokensEst)
 	}
 }
+
+// --- New tests ported from Python ---
+
+func TestCompressProducesEntityCodes(t *testing.T) {
+	d := New(map[string]string{"Alice": "ALC", "Bob": "BOB"}, nil)
+	result := d.Compress("Alice told Bob about the new deployment strategy.")
+	if !strings.Contains(result, "ALC") && !strings.Contains(result, "BOB") {
+		t.Errorf("expected entity codes in result, got %q", result)
+	}
+}
+
+func TestMaxThreeEmotions(t *testing.T) {
+	d := New(nil, nil)
+	text := "I feel scared, happy, angry, surprised, disgusted, and confused."
+	emotions := d.detectEmotions(text)
+	if len(emotions) > 3 {
+		t.Errorf("emotions = %d, want <= 3", len(emotions))
+	}
+}
+
+func TestTruncatesLongSentences(t *testing.T) {
+	d := New(nil, nil)
+	text := strings.Repeat("a ", 100)
+	sent := d.extractKeySentence(text)
+	if len(sent) > 55 {
+		t.Errorf("key sentence len = %d, want <= 55", len(sent))
+	}
+}
+
+func TestCountTokens(t *testing.T) {
+	got := CountTokens("hello world")
+	if got != 2 {
+		t.Errorf("CountTokens('hello world') = %d, want 2", got)
+	}
+}
+
+func TestDecodeRoundtrip(t *testing.T) {
+	d := New(nil, nil)
+	encoded := "001|ALC+BOB|2025-01-01|test_title\nARC:journey\n001:ALC|memory_ai|\"test quote\"|0.9|joy"
+	decoded := d.Decode(encoded)
+	if decoded.Header["field_0"] != "001" {
+		t.Errorf("header field_0 = %q, want 001", decoded.Header["field_0"])
+	}
+	if decoded.Arc != "journey" {
+		t.Errorf("arc = %q, want journey", decoded.Arc)
+	}
+	if len(decoded.Zettels) != 1 {
+		t.Errorf("zettels = %d, want 1", len(decoded.Zettels))
+	}
+}
