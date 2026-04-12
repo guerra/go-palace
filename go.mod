@@ -1,6 +1,6 @@
 module go-palace
 
-go 1.24.3
+go 1.26.2
 
 require (
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6
