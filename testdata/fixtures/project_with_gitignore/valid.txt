@@ -1,0 +1,2 @@
+plain valid text file that should be mined normally without being
+ignored by any rule in the gitignore fixture. padded to exceed min size.

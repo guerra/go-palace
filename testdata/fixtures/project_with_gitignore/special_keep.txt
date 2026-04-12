@@ -1,0 +1,2 @@
+kept via !special_keep.txt negation that overrides the prior special_*.txt
+padding padding padding padding padding to exceed the min chunk size limit

@@ -1,0 +1,5 @@
+/anchored.txt
+build/
+special_*.txt
+!special_keep.txt
+**/secret.md

@@ -1,0 +1,2 @@
+deep anchored text — this file should NOT be ignored because the rule
+anchors to repo root only, and this copy lives inside root/ subdirectory
