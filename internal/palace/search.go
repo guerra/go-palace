@@ -25,9 +25,9 @@ func (p *Palace) Query(text string, opts QueryOptions) ([]SearchResult, error) {
 	if len(vecs) != 1 {
 		return nil, fmt.Errorf("%w: expected 1 vector, got %d", ErrEmbedder, len(vecs))
 	}
-	if len(vecs[0]) != EmbeddingDim {
+	if len(vecs[0]) != p.dim {
 		return nil, fmt.Errorf("%w: query vec has dim %d, schema requires %d",
-			ErrEmbedder, len(vecs[0]), EmbeddingDim)
+			ErrEmbedder, len(vecs[0]), p.dim)
 	}
 	blob, err := vec.SerializeFloat32(vecs[0])
 	if err != nil {

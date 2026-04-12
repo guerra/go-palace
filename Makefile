@@ -58,6 +58,11 @@ vet:
 tidy:
 	go mod tidy
 
+## test/embed: run hugot integration tests (requires model download)
+.PHONY: test/embed
+test/embed:
+	go test -count=1 -tags=integration -run TestHugotEmbedder ./internal/embed/
+
 ## audit: full pipeline (tidy + vet + lint + test + build)
 .PHONY: audit
 audit: tidy vet lint test build

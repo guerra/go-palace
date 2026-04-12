@@ -2,22 +2,26 @@ package palace
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 )
 
-// schemaStatements is the ordered list of DDL statements that migrate a
+// schemaStatements returns the ordered list of DDL statements that migrate a
 // fresh database into the palace schema. It is safe to re-run on an
 // existing database because every statement uses IF NOT EXISTS.
 //
 // NOTE: vec0 virtual table columns are declared using:
 //   - `id text primary key` for the primary key
 //   - `col text partition key` for filterable scalar partitions
-//   - `embedding float[384]` for the vector column
+//   - `embedding float[N]` for the vector column (N = dim parameter)
 //
 // This matches the constructor scenarios in sqlite-vec v0.1.6
 // (sqlite-vec.c scenarios 1-4).
-var schemaStatements = []string{
-	`CREATE TABLE IF NOT EXISTS drawers (
+func schemaStatements(dim int) []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS drawers (
         id TEXT PRIMARY KEY,
         document TEXT NOT NULL,
         wing TEXT NOT NULL,
@@ -29,23 +33,60 @@ var schemaStatements = []string{
         source_mtime REAL,
         metadata_json TEXT NOT NULL DEFAULT '{}'
     )`,
-	`CREATE INDEX IF NOT EXISTS idx_drawers_source_file ON drawers(source_file)`,
-	`CREATE INDEX IF NOT EXISTS idx_drawers_wing_room ON drawers(wing, room)`,
-	`CREATE VIRTUAL TABLE IF NOT EXISTS drawers_vec USING vec0(
+		`CREATE INDEX IF NOT EXISTS idx_drawers_source_file ON drawers(source_file)`,
+		`CREATE INDEX IF NOT EXISTS idx_drawers_wing_room ON drawers(wing, room)`,
+		fmt.Sprintf(`CREATE VIRTUAL TABLE IF NOT EXISTS drawers_vec USING vec0(
         id text primary key,
         wing text partition key,
         room text partition key,
         source_file text partition key,
-        embedding float[384]
+        embedding float[%d]
+    )`, dim),
+		`CREATE TABLE IF NOT EXISTS palace_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
     )`,
+	}
+}
+
+// readStoredDim reads the embedding dimension from the palace_meta table.
+// Returns (dim, true, nil) if found, (0, false, nil) if the table or key
+// does not exist, or (0, false, err) on unexpected DB errors.
+func readStoredDim(db *sql.DB) (int, bool, error) {
+	var val string
+	err := db.QueryRow(`SELECT value FROM palace_meta WHERE key = 'embedding_dim'`).Scan(&val)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, false, nil
+		}
+		// "no such table" means legacy palace without palace_meta.
+		if strings.Contains(err.Error(), "no such table") {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("palace: read dim: %w", err)
+	}
+	dim, err := strconv.Atoi(val)
+	if err != nil {
+		return 0, false, fmt.Errorf("palace: bad stored dim %q: %w", val, err)
+	}
+	return dim, true, nil
+}
+
+// writeStoredDim writes the embedding dimension to the palace_meta table.
+func writeStoredDim(db *sql.DB, dim int) error {
+	_, err := db.Exec(
+		`INSERT OR REPLACE INTO palace_meta (key, value) VALUES ('embedding_dim', ?)`,
+		strconv.Itoa(dim),
+	)
+	return err
 }
 
 // migrate applies all DDL statements. It does NOT wrap in a transaction
 // because sqlite-vec virtual table creation cannot be nested inside a
 // user transaction — CREATE VIRTUAL TABLE allocates a shadow table and
 // must commit outside any BEGIN.
-func migrate(db *sql.DB) error {
-	for i, stmt := range schemaStatements {
+func migrate(db *sql.DB, dim int) error {
+	for i, stmt := range schemaStatements(dim) {
 		if _, err := db.Exec(stmt); err != nil {
 			return fmt.Errorf("palace: migrate stmt %d: %w", i, err)
 		}

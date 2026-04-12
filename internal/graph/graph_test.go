@@ -13,7 +13,7 @@ import (
 func setupGraphPalace(t *testing.T) *palace.Palace {
 	t.Helper()
 	p, err := palace.Open(filepath.Join(t.TempDir(), "p.db"),
-		embed.NewFakeEmbedder(palace.EmbeddingDim))
+		embed.NewFakeEmbedder(palace.DefaultEmbeddingDim))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

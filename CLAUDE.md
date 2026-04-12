@@ -16,7 +16,7 @@ Port of Python [MemPalace](https://github.com/) to Go. Local-first memory palace
 | Vector store | `sqlite-vec` (CGO) |
 | SQL driver | `mattn/go-sqlite3` (CGO) |
 | Config | JSON (`config.json`) + YAML (`mempalace.yaml`, `gopkg.in/yaml.v3`) |
-| Embeddings | `Embedder` interface — Phase 1: subprocess to Python; Phase 6: native ONNX |
+| Embeddings | hugot (pure-Go, offline) — HugotEmbedder default, FakeEmbedder for tests |
 | MCP | Hand-rolled JSON-RPC over stdio |
 | Logging | `log/slog` |
 

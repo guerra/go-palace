@@ -16,7 +16,7 @@ func setupTestPalace(t *testing.T) *palace.Palace {
 	t.Helper()
 	p, err := palace.Open(
 		filepath.Join(t.TempDir(), "test.db"),
-		embed.NewFakeEmbedder(palace.EmbeddingDim),
+		embed.NewFakeEmbedder(palace.DefaultEmbeddingDim),
 	)
 	if err != nil {
 		t.Fatalf("open palace: %v", err)
@@ -144,7 +144,7 @@ func TestL1Wing(t *testing.T) {
 func TestL1Empty(t *testing.T) {
 	p, err := palace.Open(
 		filepath.Join(t.TempDir(), "empty.db"),
-		embed.NewFakeEmbedder(palace.EmbeddingDim),
+		embed.NewFakeEmbedder(palace.DefaultEmbeddingDim),
 	)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -160,7 +160,7 @@ func TestL1Empty(t *testing.T) {
 func TestL1MaxChars(t *testing.T) {
 	p, err := palace.Open(
 		filepath.Join(t.TempDir(), "big.db"),
-		embed.NewFakeEmbedder(palace.EmbeddingDim),
+		embed.NewFakeEmbedder(palace.DefaultEmbeddingDim),
 	)
 	if err != nil {
 		t.Fatalf("open: %v", err)

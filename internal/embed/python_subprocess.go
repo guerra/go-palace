@@ -71,6 +71,9 @@ for line in sys.stdin:
     sys.stdout.flush()
 `
 
+// Deprecated: Use HugotEmbedder for offline pure-Go embeddings.
+// PythonSubprocessEmbedder is retained for users who need exact Python parity.
+//
 // PythonSubprocessEmbedder is an Embedder that delegates to a long-lived
 // Python helper process over newline-delimited JSON. It is safe for use from
 // multiple goroutines: all pipe access is serialized with a mutex.

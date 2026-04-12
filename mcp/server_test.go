@@ -19,7 +19,7 @@ func setupTestServer(t *testing.T) *Server {
 	palacePath := filepath.Join(dir, "palace.db")
 	kgPath := filepath.Join(dir, "kg.db")
 
-	emb := embed.NewFakeEmbedder(384)
+	emb := embed.NewFakeEmbedder(palace.DefaultEmbeddingDim)
 	p, err := palace.Open(palacePath, emb)
 	if err != nil {
 		t.Fatal(err)

@@ -48,6 +48,7 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage: true,
 	}
 	cmd.PersistentFlags().String("palace", "", "override palace database path")
+	cmd.PersistentFlags().StringVar(&modelFlag, "model", "", "path to local embedding model directory")
 	cmd.AddCommand(newStatusCmd())
 	cmd.AddCommand(newInitCmd())
 	cmd.AddCommand(newMineCmd())
@@ -80,7 +81,8 @@ func newStatusCmd() *cobra.Command {
 				palacePath = flag.Value.String()
 			}
 
-			emb := buildEmbedder()
+			emb, cleanup := buildEmbedder()
+			defer cleanup()
 			p, openErr := palace.Open(palacePath, emb)
 			if openErr != nil {
 				fmt.Fprintf(w, "  palace: not found at %s\n", palacePath)
@@ -236,7 +238,8 @@ func newMineCmd() *cobra.Command {
 				if dryRun {
 					return convominer.MineConvos(copts, nil)
 				}
-				emb := buildEmbedder()
+				emb, cleanup := buildEmbedder()
+				defer cleanup()
 				p, err := palace.Open(palacePath, emb)
 				if err != nil {
 					return fmt.Errorf("mine: open palace: %w", err)
@@ -263,7 +266,8 @@ func newMineCmd() *cobra.Command {
 				return miner.Mine(opts, nil)
 			}
 
-			emb := buildEmbedder()
+			emb, cleanup := buildEmbedder()
+			defer cleanup()
 			p, err := palace.Open(palacePath, emb)
 			if err != nil {
 				return fmt.Errorf("mine: open palace: %w", err)
@@ -308,7 +312,8 @@ func newSearchCmd() *cobra.Command {
 				palacePath = flag.Value.String()
 			}
 
-			emb := buildEmbedder()
+			emb, cleanup := buildEmbedder()
+			defer cleanup()
 			p, err := palace.Open(palacePath, emb)
 			if err != nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "\n  No palace found at %s\n  Run: mempalace init <dir> then mempalace mine <dir>\n", palacePath)
@@ -333,23 +338,44 @@ func newSearchCmd() *cobra.Command {
 	return cmd
 }
 
-// buildEmbedder returns the real Python-subprocess embedder when
-// MEMPALACE_PY_DIR is set, falling back to FakeEmbedder(384) otherwise.
-// The fallback path keeps `make audit` hermetic even without Python on
-// the box — Phase B explicitly supports it.
-func buildEmbedder() embed.Embedder {
-	if os.Getenv("MEMPALACE_PY_DIR") == "" {
-		return embed.NewFakeEmbedder(384)
+// buildEmbedder returns the best available embedder and a cleanup function.
+// Callers must defer cleanup() to release resources (e.g. hugot session).
+//
+//  1. HugotEmbedder (pure-Go, offline after first model download)
+//  2. PythonSubprocessEmbedder (legacy, if MEMPALACE_PY_DIR is set)
+//  3. FakeEmbedder(384) (deterministic hash vectors — tests / offline)
+func buildEmbedder() (embed.Embedder, func()) {
+	noop := func() {}
+
+	// Try hugot first (unless explicitly disabled).
+	if os.Getenv("MEMPALACE_NO_HUGOT") == "" {
+		e, err := embed.NewHugotEmbedder(embed.HugotOptions{
+			ModelPath: modelFlag,
+		})
+		if err != nil {
+			slog.Warn("hugot embedder unavailable, trying fallbacks", "err", err)
+		} else {
+			return e, func() { _ = e.Close() }
+		}
 	}
-	e, err := embed.NewPythonSubprocessEmbedder(embed.PythonSubprocessOptions{
-		MempalaceDir: os.Getenv("MEMPALACE_PY_DIR"),
-	})
-	if err != nil {
-		slog.Warn("python embedder unavailable, using FakeEmbedder", "err", err)
-		return embed.NewFakeEmbedder(384)
+
+	// Legacy Python subprocess path.
+	if pyDir := os.Getenv("MEMPALACE_PY_DIR"); pyDir != "" {
+		e, err := embed.NewPythonSubprocessEmbedder(embed.PythonSubprocessOptions{
+			MempalaceDir: pyDir,
+		})
+		if err != nil {
+			slog.Warn("python embedder unavailable, using FakeEmbedder", "err", err)
+		} else {
+			return e, func() { _ = e.Close() }
+		}
 	}
-	return e
+
+	return embed.NewFakeEmbedder(palace.DefaultEmbeddingDim), noop
 }
+
+// modelFlag holds the --model flag value for custom model path.
+var modelFlag string
 
 func newWakeUpCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -368,7 +394,8 @@ func newWakeUpCmd() *cobra.Command {
 				palacePath = flag.Value.String()
 			}
 
-			emb := buildEmbedder()
+			emb, cleanup := buildEmbedder()
+			defer cleanup()
 			p, err := palace.Open(palacePath, emb)
 			if err != nil {
 				fmt.Fprintf(cmd.OutOrStdout(), "\n  No palace found at %s\n  Run: mempalace init <dir> then mempalace mine <dir>\n", palacePath)
@@ -501,7 +528,8 @@ func newRepairCmd() *cobra.Command {
 				palacePath = flag.Value.String()
 			}
 
-			emb := buildEmbedder()
+			emb, cleanup := buildEmbedder()
+			defer cleanup()
 			p, err := palace.Open(palacePath, emb)
 			if err != nil {
 				fmt.Fprintf(w, "\n  No palace found at %s\n", palacePath)
@@ -561,7 +589,8 @@ func newCompressCmd() *cobra.Command {
 			wingFilter, _ := cmd.Flags().GetString("wing")
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 
-			emb := buildEmbedder()
+			emb, cleanup := buildEmbedder()
+			defer cleanup()
 			p, err := palace.Open(palacePath, emb)
 			if err != nil {
 				fmt.Fprintf(w, "\n  No palace found at %s\n", palacePath)
@@ -631,7 +660,8 @@ func newMCPCmd() *cobra.Command {
 				palacePath = flag.Value.String()
 			}
 
-			emb := buildEmbedder()
+			emb, cleanup := buildEmbedder()
+			defer cleanup()
 			p, err := palace.Open(palacePath, emb)
 			if err != nil {
 				return fmt.Errorf("mcp: open palace: %w", err)

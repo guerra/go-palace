@@ -16,7 +16,7 @@ func setupTestPalace(t *testing.T) *palace.Palace {
 	t.Helper()
 	p, err := palace.Open(
 		filepath.Join(t.TempDir(), "test.db"),
-		embed.NewFakeEmbedder(palace.EmbeddingDim),
+		embed.NewFakeEmbedder(palace.DefaultEmbeddingDim),
 	)
 	if err != nil {
 		t.Fatalf("open palace: %v", err)
@@ -96,7 +96,7 @@ func TestSearchFilteredByRoom(t *testing.T) {
 func TestSearchEmptyResults(t *testing.T) {
 	p, err := palace.Open(
 		filepath.Join(t.TempDir(), "empty.db"),
-		embed.NewFakeEmbedder(palace.EmbeddingDim),
+		embed.NewFakeEmbedder(palace.DefaultEmbeddingDim),
 	)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -141,7 +141,7 @@ func TestSearchMemoriesStructured(t *testing.T) {
 func TestSearchMemoriesEmpty(t *testing.T) {
 	p, err := palace.Open(
 		filepath.Join(t.TempDir(), "empty.db"),
-		embed.NewFakeEmbedder(palace.EmbeddingDim),
+		embed.NewFakeEmbedder(palace.DefaultEmbeddingDim),
 	)
 	if err != nil {
 		t.Fatalf("open: %v", err)

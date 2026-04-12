@@ -271,7 +271,7 @@ func TestScanProjectForceInclude(t *testing.T) {
 
 func TestAlreadyMinedMTime(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "palace.db")
-	p, err := palace.Open(dbPath, embed.NewFakeEmbedder(384))
+	p, err := palace.Open(dbPath, embed.NewFakeEmbedder(palace.DefaultEmbeddingDim))
 	if err != nil {
 		t.Fatalf("palace.Open: %v", err)
 	}

@@ -14,7 +14,7 @@ import (
 func openTest(t *testing.T) *palace.Palace {
 	t.Helper()
 	p, err := palace.Open(filepath.Join(t.TempDir(), "p.db"),
-		embed.NewFakeEmbedder(palace.EmbeddingDim))
+		embed.NewFakeEmbedder(palace.DefaultEmbeddingDim))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -37,14 +37,14 @@ func makeDrawer(wing, room, src string, chunk int, doc string) palace.Drawer {
 
 func TestOpenCreateSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "p.db")
-	p, err := palace.Open(path, embed.NewFakeEmbedder(palace.EmbeddingDim))
+	p, err := palace.Open(path, embed.NewFakeEmbedder(palace.DefaultEmbeddingDim))
 	if err != nil {
 		t.Fatalf("open1: %v", err)
 	}
 	if err := p.Close(); err != nil {
 		t.Fatalf("close1: %v", err)
 	}
-	p2, err := palace.Open(path, embed.NewFakeEmbedder(palace.EmbeddingDim))
+	p2, err := palace.Open(path, embed.NewFakeEmbedder(palace.DefaultEmbeddingDim))
 	if err != nil {
 		t.Fatalf("open2 (re-open): %v", err)
 	}
@@ -229,7 +229,7 @@ func TestDrawerIDIsDeterministic(t *testing.T) {
 
 func TestPersistenceAcrossClose(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "p.db")
-	p1, err := palace.Open(path, embed.NewFakeEmbedder(palace.EmbeddingDim))
+	p1, err := palace.Open(path, embed.NewFakeEmbedder(palace.DefaultEmbeddingDim))
 	if err != nil {
 		t.Fatalf("open1: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestPersistenceAcrossClose(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	p2, err := palace.Open(path, embed.NewFakeEmbedder(palace.EmbeddingDim))
+	p2, err := palace.Open(path, embed.NewFakeEmbedder(palace.DefaultEmbeddingDim))
 	if err != nil {
 		t.Fatalf("open2: %v", err)
 	}
@@ -255,6 +255,35 @@ func TestPersistenceAcrossClose(t *testing.T) {
 	if n != 2 {
 		t.Errorf("after reopen count: got %d want 2", n)
 	}
+}
+
+func TestOpenDimensionMismatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "p.db")
+	p, err := palace.Open(path, embed.NewFakeEmbedder(384))
+	if err != nil {
+		t.Fatalf("open1: %v", err)
+	}
+	_ = p.Close()
+
+	_, err = palace.Open(path, embed.NewFakeEmbedder(128))
+	if !errors.Is(err, palace.ErrDimensionMismatch) {
+		t.Fatalf("expected ErrDimensionMismatch, got: %v", err)
+	}
+}
+
+func TestOpenSameDimensionSucceeds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "p.db")
+	p, err := palace.Open(path, embed.NewFakeEmbedder(384))
+	if err != nil {
+		t.Fatalf("open1: %v", err)
+	}
+	_ = p.Close()
+
+	p2, err := palace.Open(path, embed.NewFakeEmbedder(384))
+	if err != nil {
+		t.Fatalf("open2 should succeed with same dim: %v", err)
+	}
+	_ = p2.Close()
 }
 
 func TestUpsertReplacesRow(t *testing.T) {

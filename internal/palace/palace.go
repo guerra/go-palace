@@ -33,9 +33,13 @@ var (
 	ErrUnknownWhereKey = errors.New("palace: unknown where key")
 )
 
-// EmbeddingDim is the fixed vector dimension used by the palace schema.
-// Matches Chroma's ONNXMiniLM_L6_V2 model.
-const EmbeddingDim = 384
+// DefaultEmbeddingDim is the default vector dimension (all-MiniLM-L6-v2).
+// Used by tests and as the assumed dimension for legacy palaces.
+const DefaultEmbeddingDim = 384
+
+// ErrDimensionMismatch indicates the embedder dimension does not match
+// the dimension stored in an existing palace.
+var ErrDimensionMismatch = errors.New("palace: dimension mismatch")
 
 // allowedWhereKeys is the allowlist of columns Get may filter on.
 // Used to prevent SQL injection via dynamic column names.
@@ -52,6 +56,7 @@ type Palace struct {
 	db       *sql.DB
 	embedder embed.Embedder
 	path     string
+	dim      int
 }
 
 // Drawer is one stored memory cell. ID is deterministic via ComputeDrawerID.
@@ -98,17 +103,17 @@ func init() { vec.Auto() }
 
 // Open opens (or creates) the sqlite-vec database at path, applies the
 // schema, and returns a ready-to-use Palace. The embedder is stored for
-// later Upsert / Query calls. The embedder's dimension must match the
-// schema constant EmbeddingDim — a mismatch is rejected at Open so callers
-// don't discover it via a cryptic sqlite-vec BLOB-length error on first
-// insert.
+// later Upsert / Query calls. The embedder's dimension is validated
+// against any previously stored dimension — a mismatch is rejected at
+// Open so callers don't discover it via a cryptic sqlite-vec BLOB-length
+// error on first insert.
 func Open(path string, e embed.Embedder) (*Palace, error) {
 	if e == nil {
 		return nil, fmt.Errorf("%w: nil embedder", ErrEmbedder)
 	}
-	if d := e.Dimension(); d != EmbeddingDim {
-		return nil, fmt.Errorf("%w: embedder dim %d != schema dim %d",
-			ErrEmbedder, d, EmbeddingDim)
+	embDim := e.Dimension()
+	if embDim <= 0 {
+		return nil, fmt.Errorf("%w: embedder dim %d invalid", ErrEmbedder, embDim)
 	}
 	db, err := sql.Open("sqlite3", path)
 	if err != nil {
@@ -118,11 +123,29 @@ func Open(path string, e embed.Embedder) (*Palace, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("palace: enable WAL: %w", err)
 	}
-	if err := migrate(db); err != nil {
+	if err := migrate(db, embDim); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	return &Palace{db: db, embedder: e, path: path}, nil
+	// Check stored dimension for existing palaces.
+	storedDim, found, err := readStoredDim(db)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if found && storedDim != embDim {
+		_ = db.Close()
+		return nil, fmt.Errorf("%w: palace has dim %d but embedder has dim %d (re-mine required)",
+			ErrDimensionMismatch, storedDim, embDim)
+	}
+	if !found {
+		// New palace or legacy palace without meta — store the dimension.
+		if err := writeStoredDim(db, embDim); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("palace: write dim: %w", err)
+		}
+	}
+	return &Palace{db: db, embedder: e, path: path, dim: embDim}, nil
 }
 
 // Close releases the underlying database. It is safe to call multiple times.
@@ -160,9 +183,9 @@ func (p *Palace) UpsertBatch(ds []Drawer) error {
 			ErrEmbedder, len(vecs), len(ds))
 	}
 	for i, v := range vecs {
-		if len(v) != EmbeddingDim {
+		if len(v) != p.dim {
 			return fmt.Errorf("%w: vec[%d] has dim %d, schema requires %d",
-				ErrEmbedder, i, len(v), EmbeddingDim)
+				ErrEmbedder, i, len(v), p.dim)
 		}
 	}
 
