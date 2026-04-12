@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"go-palace/internal/embed"
+	"go-palace/pkg/embed"
 )
 
 // fakeScriptPath returns the absolute path to testdata/fake_embedder.py.

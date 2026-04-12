@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"go-palace/internal/config"
-	"go-palace/internal/embed"
-	"go-palace/internal/kg"
-	"go-palace/internal/palace"
+	"go-palace/pkg/config"
+	"go-palace/pkg/embed"
+	"go-palace/pkg/kg"
+	"go-palace/pkg/palace"
 )
 
 func setupTestServer(t *testing.T) *Server {

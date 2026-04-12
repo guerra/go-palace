@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"go-palace/internal/palace"
+	"go-palace/pkg/palace"
 )
 
 const (

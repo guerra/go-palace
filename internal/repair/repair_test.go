@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"go-palace/internal/embed"
-	"go-palace/internal/palace"
 	"go-palace/internal/repair"
+	"go-palace/pkg/embed"
+	"go-palace/pkg/palace"
 )
 
 func openTest(t *testing.T) *palace.Palace {

@@ -76,7 +76,7 @@ import (
 
 ### Struct Config com Helpers Manuais
 
-Em `internal/config/config.go`. Sem `viper`:
+Em `pkg/config/config.go`. Sem `viper`:
 
 ```go
 func Load(configDir string) (*Config, error) {

@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"go-palace/internal/palace"
+	"go-palace/pkg/palace"
 )
 
 // Node represents a room in the palace graph.

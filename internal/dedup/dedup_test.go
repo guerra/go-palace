@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"go-palace/internal/dedup"
-	"go-palace/internal/embed"
-	"go-palace/internal/palace"
+	"go-palace/pkg/embed"
+	"go-palace/pkg/palace"
 )
 
 func openTest(t *testing.T) *palace.Palace {

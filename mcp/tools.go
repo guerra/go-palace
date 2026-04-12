@@ -11,9 +11,9 @@ import (
 	"unicode"
 
 	"go-palace/internal/graph"
-	"go-palace/internal/kg"
-	"go-palace/internal/palace"
-	"go-palace/internal/searcher"
+	"go-palace/pkg/kg"
+	"go-palace/pkg/palace"
+	"go-palace/pkg/searcher"
 )
 
 // toolHandler is the signature for all tool dispatch functions.

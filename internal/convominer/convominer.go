@@ -16,7 +16,7 @@ import (
 
 	"go-palace/internal/extractor"
 	"go-palace/internal/normalize"
-	"go-palace/internal/palace"
+	"go-palace/pkg/palace"
 )
 
 // File type and size constants — ported from convo_miner.py:23-31.

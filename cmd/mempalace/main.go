@@ -12,22 +12,22 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"go-palace/internal/config"
 	"go-palace/internal/convominer"
 	"go-palace/internal/dedup"
 	"go-palace/internal/dialect"
-	"go-palace/internal/embed"
 	"go-palace/internal/entity"
 	"go-palace/internal/hooks"
 	"go-palace/internal/instructions"
-	"go-palace/internal/layers"
 	"go-palace/internal/miner"
-	"go-palace/internal/palace"
 	"go-palace/internal/repair"
 	"go-palace/internal/room"
-	"go-palace/internal/searcher"
 	"go-palace/internal/splitter"
 	mcppkg "go-palace/mcp"
+	"go-palace/pkg/config"
+	"go-palace/pkg/embed"
+	"go-palace/pkg/layers"
+	"go-palace/pkg/palace"
+	"go-palace/pkg/searcher"
 	"go-palace/version"
 )
 

@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	"go-palace/internal/config"
-	"go-palace/internal/kg"
-	"go-palace/internal/palace"
+	"go-palace/pkg/config"
+	"go-palace/pkg/kg"
+	"go-palace/pkg/palace"
 	"go-palace/version"
 )
 

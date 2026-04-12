@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"go-palace/internal/embed"
-	"go-palace/internal/palace"
 	"go-palace/internal/room"
+	"go-palace/pkg/embed"
+	"go-palace/pkg/palace"
 )
 
 // ---- chunker ---------------------------------------------------------------

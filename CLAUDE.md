@@ -53,24 +53,29 @@ One command runs it all: `make audit`.
 
 ```
 cmd/mempalace/        # CLI entry (cobra dispatch)
-internal/
+pkg/                  # Public API — importable by external consumers
   config/             # JSON config + env vars
   palace/             # sqlite-vec store (replaces ChromaDB)
+  embed/              # Embedder interface + impls (Hugot, Python subprocess, Fake)
+  searcher/           # Semantic search
+  layers/             # L0/L1/L2/L3 memory stack
+  kg/                 # Knowledge graph (SQLite)
+  sanitizer/          # Input sanitization
+internal/             # Private — not importable outside this module
   miner/              # Project file mining (worker pool)
   convominer/         # Conversation mining
   normalize/          # Chat format normalization (Claude/Codex/ChatGPT/Slack)
   extractor/          # 5-type heuristic memory extraction
-  searcher/           # Semantic search
-  layers/             # L0/L1/L2/L3 memory stack
   dialect/            # AAAK dialect encoder/decoder
   graph/              # Palace graph traversal
-  kg/                 # Knowledge graph (SQLite)
   entity/             # Entity detection + registry
   room/               # Room detection from folders
   spellcheck/         # Spell correction
   splitter/           # Mega-file splitting
   hooks/              # Harness hook handlers
-  embed/              # Embedder interface + impls
+  dedup/              # Duplicate detection
+  repair/             # Palace repair utilities
+  instructions/       # Instruction handling
 mcp/                  # MCP server (public)
 version/              # Version constant
 ```

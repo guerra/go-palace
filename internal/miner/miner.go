@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"go-palace/internal/normalize"
-	"go-palace/internal/palace"
 	"go-palace/internal/room"
+	"go-palace/pkg/palace"
 )
 
 // MineOptions configures one Mine() invocation. Workers is a RESERVED
