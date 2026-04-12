@@ -256,7 +256,9 @@ func TestNormalizePlainTextNoMarkers(t *testing.T) {
 func TestNormalizeEmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty.txt")
-	os.WriteFile(path, []byte(""), 0o644)
+	if err := os.WriteFile(path, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	got, err := Normalize(path)
 	if err != nil {
 		t.Fatal(err)
@@ -269,7 +271,9 @@ func TestNormalizeEmptyFile(t *testing.T) {
 func TestNormalizeWhitespaceOnly(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ws.txt")
-	os.WriteFile(path, []byte("   \n  \n  "), 0o644)
+	if err := os.WriteFile(path, []byte("   \n  \n  "), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	got, err := Normalize(path)
 	if err != nil {
 		t.Fatal(err)
@@ -287,7 +291,9 @@ func TestNormalizeJSONContentDetectedByBrace(t *testing.T) {
 	b, _ := json.Marshal(data)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "chat.txt") // .txt but starts with [
-	os.WriteFile(path, b, 0o644)
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	got, err := Normalize(path)
 	if err != nil {
 		t.Fatal(err)

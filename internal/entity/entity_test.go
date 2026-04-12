@@ -408,7 +408,9 @@ func TestDetectEntitiesWithProjectFile(t *testing.T) {
 		"Check Lantern.py for the source.",
 		"Lantern v2 is faster.",
 	}, "\n")
-	os.WriteFile(path, []byte(content), 0o644)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	result := entity.Detect([]string{path}, 10)
 	allNames := []string{}
 	for _, e := range result.People {
@@ -434,7 +436,9 @@ func TestDetectEntitiesWithProjectFile(t *testing.T) {
 func TestDetectEntitiesEmptyFiles(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty.txt")
-	os.WriteFile(path, []byte(""), 0o644)
+	if err := os.WriteFile(path, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	result := entity.Detect([]string{path}, 10)
 	if len(result.People) != 0 || len(result.Projects) != 0 || len(result.Uncertain) != 0 {
 		t.Error("expected empty result for empty file")
@@ -453,7 +457,9 @@ func TestDetectEntitiesRespectsMaxFiles(t *testing.T) {
 	var paths []string
 	for i := 0; i < 5; i++ {
 		path := filepath.Join(dir, fmt.Sprintf("file%d.txt", i))
-		os.WriteFile(path, []byte(strings.Repeat("Riley said hello. ", 10)), 0o644)
+		if err := os.WriteFile(path, []byte(strings.Repeat("Riley said hello. ", 10)), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		paths = append(paths, path)
 	}
 	// max_files=2 should not panic and should still detect entities from limited files
@@ -468,9 +474,15 @@ func TestDetectEntitiesRespectsMaxFiles(t *testing.T) {
 
 func TestScanForDetectionFindsProse(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "notes.md"), []byte("hello"), 0o644)
-	os.WriteFile(filepath.Join(dir, "data.txt"), []byte("world"), 0o644)
-	os.WriteFile(filepath.Join(dir, "code.py"), []byte("import os"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "notes.md"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "data.txt"), []byte("world"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "code.py"), []byte("import os"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	files, err := entity.ScanForDetection(dir, 100)
 	if err != nil {
 		t.Fatal(err)
@@ -487,9 +499,15 @@ func TestScanForDetectionFindsProse(t *testing.T) {
 func TestScanForDetectionSkipsGitDir(t *testing.T) {
 	dir := t.TempDir()
 	gitDir := filepath.Join(dir, ".git")
-	os.MkdirAll(gitDir, 0o755)
-	os.WriteFile(filepath.Join(gitDir, "config.txt"), []byte("git config"), 0o644)
-	os.WriteFile(filepath.Join(dir, "readme.md"), []byte("hello"), 0o644)
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitDir, "config.txt"), []byte("git config"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "readme.md"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	files, err := entity.ScanForDetection(dir, 100)
 	if err != nil {
 		t.Fatal(err)
@@ -503,10 +521,18 @@ func TestScanForDetectionSkipsGitDir(t *testing.T) {
 
 func TestScanForDetectionFallbackToAllReadable(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "one.md"), []byte("hello"), 0o644)
-	os.WriteFile(filepath.Join(dir, "two.txt"), []byte("world"), 0o644)
-	os.WriteFile(filepath.Join(dir, "code.py"), []byte("import os"), 0o644)
-	os.WriteFile(filepath.Join(dir, "app.js"), []byte("console.log()"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "one.md"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "two.txt"), []byte("world"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "code.py"), []byte("import os"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "app.js"), []byte("console.log()"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	files, err := entity.ScanForDetection(dir, 100)
 	if err != nil {
 		t.Fatal(err)
@@ -523,7 +549,9 @@ func TestScanForDetectionFallbackToAllReadable(t *testing.T) {
 func TestScanForDetectionMaxFiles(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < 20; i++ {
-		os.WriteFile(filepath.Join(dir, fmt.Sprintf("note%d.md", i)), []byte(fmt.Sprintf("content %d", i)), 0o644)
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("note%d.md", i)), []byte(fmt.Sprintf("content %d", i)), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	files, err := entity.ScanForDetection(dir, 5)
 	if err != nil {
@@ -698,7 +726,7 @@ func TestLookupAmbiguousWordAsConcept(t *testing.T) {
 func TestResearchCachesResult(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/Saoirse", func(w http.ResponseWriter, _ *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"type":    "standard",
 			"extract": "Saoirse is an Irish given name meaning freedom.",
 			"title":   "Saoirse",
@@ -735,7 +763,7 @@ func TestConfirmResearchAddsToPeople(t *testing.T) {
 	// The Research method with autoConfirm=true confirms it.
 	mux := http.NewServeMux()
 	mux.HandleFunc("/TestPerson", func(w http.ResponseWriter, _ *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"type":    "standard",
 			"extract": "TestPerson is a given name.",
 			"title":   "TestPerson",
