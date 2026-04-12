@@ -1,0 +1,41 @@
+{
+  "mapping": {
+    "root-id": {
+      "parent": null,
+      "message": null,
+      "children": ["msg-1"]
+    },
+    "msg-1": {
+      "parent": "root-id",
+      "message": {
+        "author": {"role": "user"},
+        "content": {"parts": ["What is the best approach for vector search in Go?"]}
+      },
+      "children": ["msg-2"]
+    },
+    "msg-2": {
+      "parent": "msg-1",
+      "message": {
+        "author": {"role": "assistant"},
+        "content": {"parts": ["For vector search in Go, sqlite-vec is a great option. It provides HNSW indexing via a SQLite extension."]}
+      },
+      "children": ["msg-3"]
+    },
+    "msg-3": {
+      "parent": "msg-2",
+      "message": {
+        "author": {"role": "user"},
+        "content": {"parts": ["How does it compare to ChromaDB?"]}
+      },
+      "children": ["msg-4"]
+    },
+    "msg-4": {
+      "parent": "msg-3",
+      "message": {
+        "author": {"role": "assistant"},
+        "content": {"parts": ["sqlite-vec is embedded and requires no server. ChromaDB needs a separate process. For local-first apps, sqlite-vec wins on simplicity."]}
+      },
+      "children": []
+    }
+  }
+}

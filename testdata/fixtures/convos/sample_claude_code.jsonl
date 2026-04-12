@@ -1,0 +1,6 @@
+{"type":"human","message":{"content":"How do I set up a Go project with sqlite-vec?"}}
+{"type":"assistant","message":{"content":"You need to install the sqlite-vec Go bindings. First add the dependency with go get, then import the cgo package and call vec.Auto() in an init function."}}
+{"type":"human","message":{"content":"What about the embedder interface?"}}
+{"type":"assistant","message":{"content":"Define an Embedder interface with Embed(docs []string) and Dimension() methods. This lets you swap implementations without changing the palace code."}}
+{"type":"human","message":{"content":"Can I use a fake embedder for testing?"}}
+{"type":"assistant","message":{"content":"Yes, create a FakeEmbedder that returns deterministic vectors. This keeps tests fast and hermetic without needing a real model."}}

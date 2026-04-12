@@ -404,3 +404,45 @@ func TestB012_MineIncrementalSkip(t *testing.T) {
 		t.Errorf("second run should skip >0 files: %s", goInv.Stdout)
 	}
 }
+
+// ----------------------------------------------------------------------------
+// B-007: mine --mode convos (dry-run)
+// ----------------------------------------------------------------------------
+
+func TestB007_MineConvos(t *testing.T) {
+	dir := copyFixture(t, "convos")
+	palace := tempPalace(t)
+	_, goInv := invoke(t, "mine", dir, "--mode", "convos", "--palace", palace, "--dry-run")
+	if goInv == nil {
+		t.Skip("go impl not available")
+	}
+	if goInv.ExitCode != 0 {
+		t.Fatalf("mine convos dry-run exit=%d: stdout=%s stderr=%s", goInv.ExitCode, goInv.Stdout, goInv.Stderr)
+	}
+	for _, p := range []string{`MemPalace Mine`, `Conversations`, `DRY RUN`} {
+		if !regexp.MustCompile(p).MatchString(goInv.Stdout) {
+			t.Errorf("mine convos stdout missing %q: %s", p, goInv.Stdout)
+		}
+	}
+}
+
+// ----------------------------------------------------------------------------
+// B-013: mine --mode convos --extract general (dry-run)
+// ----------------------------------------------------------------------------
+
+func TestB013_MineExtractGeneral(t *testing.T) {
+	dir := copyFixture(t, "convos")
+	palace := tempPalace(t)
+	_, goInv := invoke(t, "mine", dir, "--mode", "convos", "--extract", "general", "--palace", palace, "--dry-run")
+	if goInv == nil {
+		t.Skip("go impl not available")
+	}
+	if goInv.ExitCode != 0 {
+		t.Fatalf("mine extract general exit=%d: stdout=%s stderr=%s", goInv.ExitCode, goInv.Stdout, goInv.Stderr)
+	}
+	for _, p := range []string{`DRY RUN`, `memories`} {
+		if !regexp.MustCompile(p).MatchString(goInv.Stdout) {
+			t.Errorf("mine extract general stdout missing %q: %s", p, goInv.Stdout)
+		}
+	}
+}

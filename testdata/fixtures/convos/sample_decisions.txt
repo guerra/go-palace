@@ -1,0 +1,14 @@
+> We decided to use Go instead of Rust because the team already knows Go well
+That makes sense. Go is a pragmatic choice for this project. The ecosystem is mature enough.
+
+> I prefer always using table-driven tests rather than individual test functions
+I agree. Table-driven tests are the Go convention and they make it easy to add new cases.
+
+> It finally works! After three days of debugging I got the sqlite-vec integration working
+That is a great milestone. The hard part was figuring out the CGO bindings.
+
+> The bug was in the parser and the root cause turned out to be a missing null check
+Classic issue. The fix was straightforward once we found it.
+
+> I love this project, it makes me happy every time I work on it and I feel grateful
+That is wonderful to hear. Building something meaningful is deeply satisfying.

@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"go-palace/internal/config"
+	"go-palace/internal/convominer"
 	"go-palace/internal/embed"
 	"go-palace/internal/miner"
 	"go-palace/internal/palace"
@@ -137,10 +138,36 @@ func newMineCmd() *cobra.Command {
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			noGitignore, _ := cmd.Flags().GetBool("no-gitignore")
 			includeIgnored, _ := cmd.Flags().GetStringSlice("include-ignored")
+			mode, _ := cmd.Flags().GetString("mode")
+			extractMode, _ := cmd.Flags().GetString("extract")
 
 			palacePath := cfg.PalacePath
 			if flag := cmd.Flag("palace"); flag != nil && flag.Value.String() != "" {
 				palacePath = flag.Value.String()
+			}
+
+			// Dispatch to convominer when --mode=convos.
+			if mode == "convos" {
+				copts := convominer.ConvoMineOptions{
+					ConvoDir:     dir,
+					PalacePath:   palacePath,
+					WingOverride: wing,
+					Agent:        agent,
+					Limit:        limit,
+					DryRun:       dryRun,
+					ExtractMode:  extractMode,
+					Stdout:       cmd.OutOrStdout(),
+				}
+				if dryRun {
+					return convominer.MineConvos(copts, nil)
+				}
+				emb := buildEmbedder()
+				p, err := palace.Open(palacePath, emb)
+				if err != nil {
+					return fmt.Errorf("mine: open palace: %w", err)
+				}
+				defer func() { _ = p.Close() }()
+				return convominer.MineConvos(copts, p)
 			}
 
 			opts := miner.MineOptions{
@@ -177,6 +204,8 @@ func newMineCmd() *cobra.Command {
 	cmd.Flags().Bool("dry-run", false, "print what would be filed without touching the palace")
 	cmd.Flags().Bool("no-gitignore", false, "ignore .gitignore files")
 	cmd.Flags().StringSlice("include-ignored", nil, "force-include specific paths even if .gitignored")
+	cmd.Flags().String("mode", "projects", "mining mode: projects or convos")
+	cmd.Flags().String("extract", "exchange", "extraction mode for convos: exchange or general")
 	return cmd
 }
 

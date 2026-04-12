@@ -1,0 +1,11 @@
+> How should I structure the palace package?
+The palace package should be the only one importing sqlite3. Every other package goes through the Palace API.
+
+> What about the embedder?
+Define an interface so you can swap fake embedders in tests. The real embedder calls Python via subprocess.
+
+> Should I use WAL mode?
+Yes, WAL mode gives better concurrent read performance. Enable it with PRAGMA journal_mode=WAL on open.
+
+> What about migrations?
+Keep a migrate function that creates tables if they do not exist. Use IF NOT EXISTS for idempotency.
