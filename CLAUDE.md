@@ -76,6 +76,8 @@ version/              # Version constant
 
 Package design details in `mempalace-go-plan-result.md` Phase 2.
 
+> Full module map, data flows, ADRs, and scaling assessment: `.agents/arch/system.arch.md`
+
 ## Rules
 
 Project rules live in `.claude/rules/`. Mandatory rules load automatically; path-scoped rules load when you touch matching files.

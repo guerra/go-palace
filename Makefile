@@ -37,10 +37,11 @@ test/cover:
 	go tool cover -func=coverage.out
 
 ## test/suite: run behavioral equivalence suite vs Python oracle
+##   Defaults to MEMPALACE_IMPL=go so this target passes without uv/python.
+##   Set MEMPALACE_IMPL=both to additionally drive the Python oracle.
 .PHONY: test/suite
-test/suite:
-	@echo "TODO: wire behavioral suite (see mempalace-go-test-suite-result.md)"
-	@exit 1
+test/suite: build
+	MEMPALACE_GO_BIN=$(CURDIR)/$(BINARY) go test -tags=testsuite ./testsuite/...
 
 ## lint: run golangci-lint
 .PHONY: lint
