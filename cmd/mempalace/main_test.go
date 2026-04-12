@@ -22,14 +22,15 @@ func TestStatusCommand(t *testing.T) {
 	if !strings.Contains(out, "mempalace") {
 		t.Errorf("expected output to contain 'mempalace', got %q", out)
 	}
-	if !strings.Contains(out, "ok") {
-		t.Errorf("expected output to contain 'ok', got %q", out)
+	// Enhanced status prints version + palace info (or "not found" hint).
+	if !strings.Contains(out, "0.1.0") {
+		t.Errorf("expected output to contain version, got %q", out)
 	}
 }
 
 func TestRootHasExpectedSubcommands(t *testing.T) {
 	root := newRootCmd()
-	want := map[string]bool{"status": false, "init": false, "mine": false, "search": false, "wake-up": false}
+	want := map[string]bool{"status": false, "init": false, "mine": false, "search": false, "wake-up": false, "split": false, "hook": false, "instructions": false, "repair": false, "compress": false, "mcp": false}
 	for _, c := range root.Commands() {
 		if _, ok := want[c.Name()]; ok {
 			want[c.Name()] = true
@@ -83,7 +84,7 @@ func TestHelpLists(t *testing.T) {
 		t.Fatalf("help: %v", err)
 	}
 	out := buf.String()
-	for _, want := range []string{"init", "mine", "search", "status", "wake-up"} {
+	for _, want := range []string{"init", "mine", "search", "status", "wake-up", "split", "hook", "instructions", "repair", "compress", "mcp"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help missing %q: %s", want, out)
 		}

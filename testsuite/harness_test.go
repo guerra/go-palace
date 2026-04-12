@@ -188,14 +188,14 @@ func tempPalace(t *testing.T) string {
 
 func TestB001_NoArgs_PrintsHelp(t *testing.T) {
 	py, goInv := invoke(t)
-	patterns := []string{`(?i)mempalace`, `(?i)init`, `(?i)mine`, `(?i)search`, `(?i)status`}
+	patterns := []string{`(?i)mempalace`, `(?i)init`, `(?i)mine`, `(?i)search`, `(?i)status`, `(?i)split`, `(?i)hook`, `(?i)instructions`, `(?i)repair`, `(?i)compress`, `(?i)mcp`}
 	compareStructural(t, "B-001", py, goInv, patterns)
 	compareExitCode(t, "B-001", py, goInv)
 }
 
 func TestB002_HelpFlag(t *testing.T) {
 	py, goInv := invoke(t, "--help")
-	patterns := []string{`(?i)usage`, `(?i)init`, `(?i)mine`, `(?i)search`, `(?i)status`}
+	patterns := []string{`(?i)usage`, `(?i)init`, `(?i)mine`, `(?i)search`, `(?i)status`, `(?i)split`, `(?i)mcp`}
 	compareStructural(t, "B-002", py, goInv, patterns)
 	compareExitCode(t, "B-002", py, goInv)
 }
@@ -570,4 +570,223 @@ func TestB021_WakeUpWing(t *testing.T) {
 	if !strings.Contains(out, "Wake-up text") {
 		t.Errorf("wake-up wing missing header:\n%s", out)
 	}
+}
+
+// ----------------------------------------------------------------------------
+// Phase F: B-024..B-029 — splitter, hooks, instructions
+// ----------------------------------------------------------------------------
+
+func TestB024_SplitMegaFile(t *testing.T) {
+	dir := t.TempDir()
+	// Create a multi-session .txt file.
+	content := "Claude Code v1.0\nfirst session content\n" +
+		strings.Repeat("line\n", 20) +
+		"Claude Code v1.0\nsecond session content\n" +
+		strings.Repeat("line\n", 20)
+	if err := os.WriteFile(filepath.Join(dir, "mega.txt"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, goInv := invoke(t, "split", dir, "--dry-run")
+	if goInv == nil {
+		t.Skip("go impl not available")
+	}
+	if goInv.ExitCode != 0 {
+		t.Fatalf("split exit=%d: %s", goInv.ExitCode, goInv.Stdout+goInv.Stderr)
+	}
+	out := goInv.Stdout
+	if !strings.Contains(out, "DRY RUN") {
+		t.Errorf("split --dry-run missing DRY RUN in output: %s", out)
+	}
+	if !strings.Contains(out, "2 sessions") {
+		t.Errorf("split should mention 2 sessions: %s", out)
+	}
+}
+
+func TestB026_HookStop(t *testing.T) {
+	dir := t.TempDir()
+	// No transcript = low count = no block.
+	input := `{"session_id":"test","stop_hook_active":false,"transcript_path":""}`
+	goInv := runCmdWithStdin(t, input, "hook", "run", "--hook", "stop", "--harness", "claude-code")
+	if goInv.ExitCode != 0 {
+		t.Fatalf("hook stop exit=%d: %s", goInv.ExitCode, goInv.Stderr)
+	}
+	_ = dir
+	// Should output JSON — empty means no block.
+	if !strings.Contains(goInv.Stdout, "{") {
+		t.Errorf("hook stop should output JSON: %s", goInv.Stdout)
+	}
+}
+
+func TestB027_HookSessionStart(t *testing.T) {
+	input := `{"session_id":"test123"}`
+	goInv := runCmdWithStdin(t, input, "hook", "run", "--hook", "session-start", "--harness", "claude-code")
+	if goInv.ExitCode != 0 {
+		t.Fatalf("hook session-start exit=%d: %s", goInv.ExitCode, goInv.Stderr)
+	}
+	if !strings.Contains(goInv.Stdout, "{") {
+		t.Errorf("hook session-start should output JSON: %s", goInv.Stdout)
+	}
+}
+
+func TestB028_HookPrecompact(t *testing.T) {
+	input := `{"session_id":"test123"}`
+	goInv := runCmdWithStdin(t, input, "hook", "run", "--hook", "precompact", "--harness", "claude-code")
+	if goInv.ExitCode != 0 {
+		t.Fatalf("hook precompact exit=%d: %s", goInv.ExitCode, goInv.Stderr)
+	}
+	if !strings.Contains(goInv.Stdout, "block") {
+		t.Errorf("hook precompact should output block decision: %s", goInv.Stdout)
+	}
+}
+
+func TestB029_Instructions(t *testing.T) {
+	_, goInv := invoke(t, "instructions", "init")
+	if goInv == nil {
+		t.Skip("go impl not available")
+	}
+	if goInv.ExitCode != 0 {
+		t.Fatalf("instructions init exit=%d: %s", goInv.ExitCode, goInv.Stderr)
+	}
+	if !strings.Contains(goInv.Stdout, "MemPalace Init") {
+		t.Errorf("instructions init missing expected content: %s", goInv.Stdout)
+	}
+
+	// Unknown instruction should fail.
+	_, goInv2 := invoke(t, "instructions", "nonexistent")
+	if goInv2 == nil {
+		t.Skip("go impl not available")
+	}
+	if goInv2.ExitCode == 0 {
+		t.Error("instructions nonexistent should exit non-zero")
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Phase F: B-050..B-075 — MCP behavioral tests
+// ----------------------------------------------------------------------------
+
+func TestB050_MCPInitialize(t *testing.T) {
+	palacePath := seedPalace(t)
+	req := `{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05"}}` + "\n"
+	goInv := runCmdWithStdin(t, req, "mcp", "--serve", "--palace", palacePath)
+	if goInv.ExitCode != 0 {
+		t.Fatalf("mcp init exit=%d: stderr=%s", goInv.ExitCode, goInv.Stderr)
+	}
+	if !strings.Contains(goInv.Stdout, "protocolVersion") {
+		t.Errorf("mcp initialize missing protocolVersion: %s", goInv.Stdout)
+	}
+	if !strings.Contains(goInv.Stdout, "mempalace") {
+		t.Errorf("mcp initialize missing server name: %s", goInv.Stdout)
+	}
+}
+
+func TestB051_MCPToolsList(t *testing.T) {
+	palacePath := seedPalace(t)
+	req := `{"jsonrpc":"2.0","method":"tools/list","id":2}` + "\n"
+	goInv := runCmdWithStdin(t, req, "mcp", "--serve", "--palace", palacePath)
+	if goInv.ExitCode != 0 {
+		t.Fatalf("mcp tools/list exit=%d: stderr=%s", goInv.ExitCode, goInv.Stderr)
+	}
+	for _, tool := range []string{"mempalace_status", "mempalace_search", "mempalace_add_drawer"} {
+		if !strings.Contains(goInv.Stdout, tool) {
+			t.Errorf("tools/list missing %s: %s", tool, goInv.Stdout)
+		}
+	}
+}
+
+func TestB054_MCPAddDrawer(t *testing.T) {
+	palacePath := seedPalace(t)
+	req := `{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"name":"mempalace_add_drawer","arguments":{"wing":"test_wing","room":"test_room","content":"test content"}}}` + "\n"
+	goInv := runCmdWithStdin(t, req, "mcp", "--serve", "--palace", palacePath)
+	if goInv.ExitCode != 0 {
+		t.Fatalf("mcp add_drawer exit=%d: stderr=%s", goInv.ExitCode, goInv.Stderr)
+	}
+	if !strings.Contains(goInv.Stdout, "success") {
+		t.Errorf("add_drawer missing success: %s", goInv.Stdout)
+	}
+}
+
+func TestB055_MCPAddDrawerIdempotent(t *testing.T) {
+	palacePath := seedPalace(t)
+	addReq := `{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"name":"mempalace_add_drawer","arguments":{"wing":"test_wing","room":"test_room","content":"test content"}}}` + "\n"
+	// Send same request twice.
+	twoReqs := addReq + addReq
+	goInv := runCmdWithStdin(t, twoReqs, "mcp", "--serve", "--palace", palacePath)
+	if goInv.ExitCode != 0 {
+		t.Fatalf("mcp add_drawer x2 exit=%d: stderr=%s", goInv.ExitCode, goInv.Stderr)
+	}
+	if !strings.Contains(goInv.Stdout, "already_exists") {
+		t.Errorf("second add should return already_exists: %s", goInv.Stdout)
+	}
+}
+
+func TestB074_MCPUnknownTool(t *testing.T) {
+	palacePath := seedPalace(t)
+	req := `{"jsonrpc":"2.0","method":"tools/call","id":4,"params":{"name":"nonexistent_tool"}}` + "\n"
+	goInv := runCmdWithStdin(t, req, "mcp", "--serve", "--palace", palacePath)
+	if goInv.ExitCode != 0 {
+		t.Fatalf("mcp unknown tool exit=%d: stderr=%s", goInv.ExitCode, goInv.Stderr)
+	}
+	if !strings.Contains(goInv.Stdout, "Unknown tool") {
+		t.Errorf("unknown tool missing error: %s", goInv.Stdout)
+	}
+}
+
+func TestB075_MCPUnknownMethod(t *testing.T) {
+	palacePath := seedPalace(t)
+	req := `{"jsonrpc":"2.0","method":"bogus/method","id":5}` + "\n"
+	goInv := runCmdWithStdin(t, req, "mcp", "--serve", "--palace", palacePath)
+	if goInv.ExitCode != 0 {
+		t.Fatalf("mcp unknown method exit=%d: stderr=%s", goInv.ExitCode, goInv.Stderr)
+	}
+	if !strings.Contains(goInv.Stdout, "Unknown method") {
+		t.Errorf("unknown method missing error: %s", goInv.Stdout)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Phase F: Enhanced status test
+// ----------------------------------------------------------------------------
+
+func TestB030_EnhancedStatus(t *testing.T) {
+	palacePath := seedPalace(t)
+	_, goInv := invoke(t, "status", "--palace", palacePath)
+	if goInv == nil {
+		t.Skip("go impl not available")
+	}
+	if goInv.ExitCode != 0 {
+		t.Fatalf("status exit=%d: %s", goInv.ExitCode, goInv.Stderr)
+	}
+	out := goInv.Stdout
+	for _, want := range []string{"drawers:", "wings:", "rooms:"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("enhanced status missing %q: %s", want, out)
+		}
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Phase F helpers: stdin piping
+// ----------------------------------------------------------------------------
+
+func runCmdWithStdin(t *testing.T, stdin string, args ...string) invocation {
+	t.Helper()
+	bin := os.Getenv("MEMPALACE_GO_BIN")
+	if bin == "" {
+		t.Fatal("MEMPALACE_GO_BIN is required for the behavioral suite")
+	}
+	var stdout, stderr bytes.Buffer
+	cmd := exec.Command(bin, args...)
+	cmd.Stdin = strings.NewReader(stdin)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	inv := invocation{Stdout: stdout.String(), Stderr: stderr.String()}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		inv.ExitCode = exitErr.ExitCode()
+	} else if err != nil {
+		t.Fatalf("run %s %v: %v", bin, args, err)
+	}
+	return inv
 }

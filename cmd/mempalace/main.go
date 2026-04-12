@@ -14,13 +14,18 @@ import (
 
 	"go-palace/internal/config"
 	"go-palace/internal/convominer"
+	"go-palace/internal/dialect"
 	"go-palace/internal/embed"
 	"go-palace/internal/entity"
+	"go-palace/internal/hooks"
+	"go-palace/internal/instructions"
 	"go-palace/internal/layers"
 	"go-palace/internal/miner"
 	"go-palace/internal/palace"
 	"go-palace/internal/room"
 	"go-palace/internal/searcher"
+	"go-palace/internal/splitter"
+	mcppkg "go-palace/mcp"
 	"go-palace/version"
 )
 
@@ -48,6 +53,12 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newMineCmd())
 	cmd.AddCommand(newSearchCmd())
 	cmd.AddCommand(newWakeUpCmd())
+	cmd.AddCommand(newSplitCmd())
+	cmd.AddCommand(newHookCmd())
+	cmd.AddCommand(newInstructionsCmd())
+	cmd.AddCommand(newRepairCmd())
+	cmd.AddCommand(newCompressCmd())
+	cmd.AddCommand(newMCPCmd())
 	return cmd
 }
 
@@ -56,7 +67,55 @@ func newStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Print runtime status",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			fmt.Fprintf(cmd.OutOrStdout(), "mempalace %s — ok\n", version.Version)
+			w := cmd.OutOrStdout()
+			fmt.Fprintf(w, "mempalace %s\n", version.Version)
+
+			cfg, err := config.Load("")
+			if err != nil {
+				fmt.Fprintf(w, "  config: %v\n", err)
+				return nil
+			}
+			palacePath := cfg.PalacePath
+			if flag := cmd.Flag("palace"); flag != nil && flag.Value.String() != "" {
+				palacePath = flag.Value.String()
+			}
+
+			emb := buildEmbedder()
+			p, openErr := palace.Open(palacePath, emb)
+			if openErr != nil {
+				fmt.Fprintf(w, "  palace: not found at %s\n", palacePath)
+				fmt.Fprintf(w, "  hint: mempalace init <dir> && mempalace mine <dir>\n")
+				return nil
+			}
+			defer func() { _ = p.Close() }()
+
+			total, _ := p.Count()
+			fmt.Fprintf(w, "  palace: %s\n", palacePath)
+			fmt.Fprintf(w, "  drawers: %d\n", total)
+
+			wings := map[string]int{}
+			rooms := map[string]int{}
+			offset := 0
+			for {
+				drawers, err := p.Get(palace.GetOptions{Limit: 5000, Offset: offset})
+				if err != nil || len(drawers) == 0 {
+					break
+				}
+				for _, d := range drawers {
+					if d.Wing != "" {
+						wings[d.Wing]++
+					}
+					if d.Room != "" {
+						rooms[d.Room]++
+					}
+				}
+				offset += len(drawers)
+				if len(drawers) < 5000 {
+					break
+				}
+			}
+			fmt.Fprintf(w, "  wings: %d\n", len(wings))
+			fmt.Fprintf(w, "  rooms: %d\n", len(rooms))
 			return nil
 		},
 	}
@@ -328,6 +387,268 @@ func newWakeUpCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().String("wing", "", "filter L1 by wing")
+	return cmd
+}
+
+func newSplitCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "split [dir]",
+		Short: "Split concatenated mega-files into per-session files",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir := "."
+			if len(args) > 0 {
+				dir = args[0]
+			}
+			outputDir, _ := cmd.Flags().GetString("output-dir")
+			dryRun, _ := cmd.Flags().GetBool("dry-run")
+			minSessions, _ := cmd.Flags().GetInt("min-sessions")
+
+			results, err := splitter.Split(dir, splitter.SplitOptions{
+				OutputDir:   outputDir,
+				DryRun:      dryRun,
+				MinSessions: minSessions,
+			})
+			if err != nil {
+				return fmt.Errorf("split: %w", err)
+			}
+			w := cmd.OutOrStdout()
+			if len(results) == 0 {
+				fmt.Fprintf(w, "No mega-files found (min %d sessions).\n", minSessions)
+				return nil
+			}
+			bar := strings.Repeat("=", 60)
+			mode := "SPLITTING"
+			if dryRun {
+				mode = "DRY RUN"
+			}
+			fmt.Fprintf(w, "\n%s\n  Mega-file splitter — %s\n%s\n\n", bar, mode, bar)
+			total := 0
+			for _, r := range results {
+				fmt.Fprintf(w, "  %s  (%d sessions)\n", filepath.Base(r.SourceFile), r.SessionsFound)
+				total += r.FilesWritten
+			}
+			fmt.Fprintf(w, "\n%s\n", strings.Repeat("\u2500", 60))
+			if dryRun {
+				fmt.Fprintf(w, "  DRY RUN — would create %d files from %d mega-files\n", total, len(results))
+			} else {
+				fmt.Fprintf(w, "  Done — created %d files from %d mega-files\n", total, len(results))
+			}
+			return nil
+		},
+	}
+	cmd.Flags().String("output-dir", "", "output directory (default: same as source)")
+	cmd.Flags().Bool("dry-run", false, "show what would happen without writing files")
+	cmd.Flags().Int("min-sessions", 2, "only split files with at least N sessions")
+	return cmd
+}
+
+func newHookCmd() *cobra.Command {
+	hookCmd := &cobra.Command{
+		Use:   "hook",
+		Short: "Run harness hook logic",
+	}
+	runCmd := &cobra.Command{
+		Use:   "run",
+		Short: "Execute a hook handler",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			hookName, _ := cmd.Flags().GetString("hook")
+			harness, _ := cmd.Flags().GetString("harness")
+			if hookName == "" {
+				return fmt.Errorf("hook run: --hook is required")
+			}
+			return hooks.RunHook(hookName, harness, os.Stdin, os.Stdout)
+		},
+	}
+	runCmd.Flags().String("hook", "", "hook name: session-start, stop, precompact")
+	runCmd.Flags().String("harness", "claude-code", "harness type: claude-code, codex")
+	hookCmd.AddCommand(runCmd)
+	return hookCmd
+}
+
+func newInstructionsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "instructions [name]",
+		Short: "Output skill instructions",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			text, err := instructions.Get(args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Fprint(cmd.OutOrStdout(), text)
+			return nil
+		},
+	}
+}
+
+func newRepairCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "repair",
+		Short: "Rebuild palace vector index",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			w := cmd.OutOrStdout()
+			cfg, err := config.Load("")
+			if err != nil {
+				return fmt.Errorf("repair: config load: %w", err)
+			}
+			palacePath := cfg.PalacePath
+			if flag := cmd.Flag("palace"); flag != nil && flag.Value.String() != "" {
+				palacePath = flag.Value.String()
+			}
+
+			emb := buildEmbedder()
+			p, err := palace.Open(palacePath, emb)
+			if err != nil {
+				fmt.Fprintf(w, "\n  No palace found at %s\n", palacePath)
+				return nil
+			}
+			defer func() { _ = p.Close() }()
+
+			total, _ := p.Count()
+			fmt.Fprintf(w, "\n%s\n  MemPalace Repair\n%s\n", strings.Repeat("=", 55), strings.Repeat("=", 55))
+			fmt.Fprintf(w, "  Palace: %s\n", palacePath)
+			fmt.Fprintf(w, "  Drawers: %d\n", total)
+
+			if total == 0 {
+				fmt.Fprintf(w, "  Nothing to repair.\n")
+				return nil
+			}
+
+			// Re-embed all drawers by reading and upserting them in batches.
+			fmt.Fprintf(w, "\n  Re-embedding all drawers...\n")
+			offset := 0
+			repaired := 0
+			for {
+				drawers, err := p.Get(palace.GetOptions{Limit: 100, Offset: offset})
+				if err != nil || len(drawers) == 0 {
+					break
+				}
+				if err := p.UpsertBatch(drawers); err != nil {
+					fmt.Fprintf(w, "  Error at offset %d: %v\n", offset, err)
+					break
+				}
+				repaired += len(drawers)
+				offset += len(drawers)
+				if len(drawers) < 100 {
+					break
+				}
+			}
+			fmt.Fprintf(w, "  Repaired %d drawers.\n\n", repaired)
+			return nil
+		},
+	}
+}
+
+func newCompressCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "compress",
+		Short: "Compress palace storage using AAAK dialect",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			w := cmd.OutOrStdout()
+			cfg, err := config.Load("")
+			if err != nil {
+				return fmt.Errorf("compress: config load: %w", err)
+			}
+			palacePath := cfg.PalacePath
+			if flag := cmd.Flag("palace"); flag != nil && flag.Value.String() != "" {
+				palacePath = flag.Value.String()
+			}
+			wingFilter, _ := cmd.Flags().GetString("wing")
+			dryRun, _ := cmd.Flags().GetBool("dry-run")
+
+			emb := buildEmbedder()
+			p, err := palace.Open(palacePath, emb)
+			if err != nil {
+				fmt.Fprintf(w, "\n  No palace found at %s\n", palacePath)
+				return nil
+			}
+			defer func() { _ = p.Close() }()
+
+			d := dialect.New(nil, nil)
+
+			where := map[string]string{}
+			if wingFilter != "" {
+				where["wing"] = wingFilter
+			}
+
+			offset := 0
+			compressed := 0
+			for {
+				drawers, err := p.Get(palace.GetOptions{Where: where, Limit: 100, Offset: offset})
+				if err != nil || len(drawers) == 0 {
+					break
+				}
+				for _, dr := range drawers {
+					result := d.Compress(dr.Document)
+					if dryRun {
+						fmt.Fprintf(w, "  %s: %d → %d bytes\n", dr.ID, len(dr.Document), len(result))
+					}
+					compressed++
+				}
+				offset += len(drawers)
+				if len(drawers) < 100 {
+					break
+				}
+			}
+			if dryRun {
+				fmt.Fprintf(w, "\n  DRY RUN — would compress %d drawers\n", compressed)
+			} else {
+				fmt.Fprintf(w, "  Compressed %d drawers (dialect stub — no change)\n", compressed)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().String("wing", "", "filter by wing")
+	cmd.Flags().Bool("dry-run", false, "show what would happen without changing drawers")
+	return cmd
+}
+
+func newMCPCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "mcp",
+		Short: "MCP server for AI agents",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			serve, _ := cmd.Flags().GetBool("serve")
+			if !serve {
+				fmt.Fprintf(cmd.OutOrStdout(), "To start the MCP server:\n")
+				fmt.Fprintf(cmd.OutOrStdout(), "  mempalace mcp --serve\n\n")
+				fmt.Fprintf(cmd.OutOrStdout(), "To register with Claude Code:\n")
+				fmt.Fprintf(cmd.OutOrStdout(), "  claude mcp add mempalace -- mempalace mcp --serve\n")
+				return nil
+			}
+
+			cfg, err := config.Load("")
+			if err != nil {
+				return fmt.Errorf("mcp: config load: %w", err)
+			}
+			palacePath := cfg.PalacePath
+			if flag := cmd.Flag("palace"); flag != nil && flag.Value.String() != "" {
+				palacePath = flag.Value.String()
+			}
+
+			emb := buildEmbedder()
+			p, err := palace.Open(palacePath, emb)
+			if err != nil {
+				return fmt.Errorf("mcp: open palace: %w", err)
+			}
+			defer func() { _ = p.Close() }()
+
+			// Open KG alongside palace.
+			kgPath := palacePath + "_kg.sqlite3"
+			kgDB, kgErr := mcppkg.OpenKGForMCP(kgPath)
+			if kgErr != nil {
+				slog.Warn("mcp: kg unavailable", "error", kgErr)
+			}
+			if kgDB != nil {
+				defer func() { _ = kgDB.Close() }()
+			}
+
+			srv := mcppkg.NewServer(palacePath, p, kgDB, cfg)
+			return srv.Serve(os.Stdin, os.Stdout)
+		},
+	}
+	cmd.Flags().Bool("serve", false, "launch MCP server on stdin/stdout")
 	return cmd
 }
 
