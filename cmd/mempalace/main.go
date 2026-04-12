@@ -299,6 +299,9 @@ func newSearchCmd() *cobra.Command {
 			wing, _ := cmd.Flags().GetString("wing")
 			room, _ := cmd.Flags().GetString("room")
 			limit, _ := cmd.Flags().GetInt("limit")
+			if results, _ := cmd.Flags().GetInt("results"); results > 0 {
+				limit = results
+			}
 
 			palacePath := cfg.PalacePath
 			if flag := cmd.Flag("palace"); flag != nil && flag.Value.String() != "" {
@@ -326,6 +329,7 @@ func newSearchCmd() *cobra.Command {
 	cmd.Flags().String("wing", "", "filter by wing")
 	cmd.Flags().String("room", "", "filter by room")
 	cmd.Flags().Int("limit", 5, "max results to return")
+	cmd.Flags().Int("results", 0, "alias for --limit (max results to return)")
 	return cmd
 }
 
