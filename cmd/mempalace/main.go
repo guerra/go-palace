@@ -14,6 +14,7 @@ import (
 
 	"go-palace/internal/config"
 	"go-palace/internal/convominer"
+	"go-palace/internal/dedup"
 	"go-palace/internal/dialect"
 	"go-palace/internal/embed"
 	"go-palace/internal/entity"
@@ -22,6 +23,7 @@ import (
 	"go-palace/internal/layers"
 	"go-palace/internal/miner"
 	"go-palace/internal/palace"
+	"go-palace/internal/repair"
 	"go-palace/internal/room"
 	"go-palace/internal/searcher"
 	"go-palace/internal/splitter"
@@ -58,6 +60,7 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newHookCmd())
 	cmd.AddCommand(newInstructionsCmd())
 	cmd.AddCommand(newRepairCmd())
+	cmd.AddCommand(newDedupCmd())
 	cmd.AddCommand(newCompressCmd())
 	cmd.AddCommand(newMCPCmd())
 	return cmd
@@ -514,9 +517,9 @@ func newInstructionsCmd() *cobra.Command {
 }
 
 func newRepairCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "repair",
-		Short: "Rebuild palace vector index",
+		Short: "Scan, prune corrupt entries, and rebuild palace vector index",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			w := cmd.OutOrStdout()
 			cfg, err := config.Load("")
@@ -527,6 +530,9 @@ func newRepairCmd() *cobra.Command {
 			if flag := cmd.Flag("palace"); flag != nil && flag.Value.String() != "" {
 				palacePath = flag.Value.String()
 			}
+			dryRun, _ := cmd.Flags().GetBool("dry-run")
+			scanOnly, _ := cmd.Flags().GetBool("scan-only")
+			wing, _ := cmd.Flags().GetString("wing")
 
 			emb, cleanup := buildEmbedder()
 			defer cleanup()
@@ -538,38 +544,143 @@ func newRepairCmd() *cobra.Command {
 			defer func() { _ = p.Close() }()
 
 			total, _ := p.Count()
+			mode := "LIVE"
+			if dryRun {
+				mode = "DRY RUN"
+			}
 			fmt.Fprintf(w, "\n%s\n  MemPalace Repair\n%s\n", strings.Repeat("=", 55), strings.Repeat("=", 55))
 			fmt.Fprintf(w, "  Palace: %s\n", palacePath)
 			fmt.Fprintf(w, "  Drawers: %d\n", total)
+			fmt.Fprintf(w, "  Mode: %s\n", mode)
+			if wing != "" {
+				fmt.Fprintf(w, "  Wing: %s\n", wing)
+			}
 
 			if total == 0 {
 				fmt.Fprintf(w, "  Nothing to repair.\n")
 				return nil
 			}
 
-			// Re-embed all drawers by reading and upserting them in batches.
-			fmt.Fprintf(w, "\n  Re-embedding all drawers...\n")
-			offset := 0
-			repaired := 0
-			for {
-				drawers, err := p.Get(palace.GetOptions{Limit: 100, Offset: offset})
-				if err != nil || len(drawers) == 0 {
-					break
-				}
-				if err := p.UpsertBatch(drawers); err != nil {
-					fmt.Fprintf(w, "  Error at offset %d: %v\n", offset, err)
-					break
-				}
-				repaired += len(drawers)
-				offset += len(drawers)
-				if len(drawers) < 100 {
-					break
+			// Step 1: Scan.
+			fmt.Fprintf(w, "\n  Scanning palace...\n")
+			scan, err := repair.ScanPalace(p, wing)
+			if err != nil {
+				return fmt.Errorf("repair: scan: %w", err)
+			}
+			fmt.Fprintf(w, "  Scanned: %d  Good: %d  Bad: %d\n",
+				scan.Total, len(scan.GoodIDs), len(scan.BadIDs))
+
+			if scanOnly {
+				return nil
+			}
+
+			// Step 2: Prune bad IDs.
+			if len(scan.BadIDs) > 0 {
+				fmt.Fprintf(w, "\n  Pruning %d corrupt entries...\n", len(scan.BadIDs))
+				pruned, err := repair.PruneCorrupt(p, scan.BadIDs, dryRun)
+				if err != nil {
+					fmt.Fprintf(w, "  Prune error: %v\n", err)
+				} else {
+					fmt.Fprintf(w, "  Pruned: %d\n", pruned)
 				}
 			}
-			fmt.Fprintf(w, "  Repaired %d drawers.\n\n", repaired)
+
+			// Step 3: Rebuild.
+			fmt.Fprintf(w, "\n  Rebuilding index...\n")
+			result, err := repair.RebuildIndex(p, dryRun)
+			if err != nil {
+				return fmt.Errorf("repair: rebuild: %w", err)
+			}
+			fmt.Fprintf(w, "  Rebuilt: %d drawers\n", result.Rebuilt)
+			if len(result.Errors) > 0 {
+				for _, e := range result.Errors {
+					fmt.Fprintf(w, "  Error: %v\n", e)
+				}
+			}
+
+			if dryRun {
+				fmt.Fprintf(w, "\n  [DRY RUN] No changes written.\n")
+			} else {
+				fmt.Fprintf(w, "  Repaired %d drawers.\n", result.Rebuilt)
+			}
+			fmt.Fprintln(w)
 			return nil
 		},
 	}
+	cmd.Flags().Bool("dry-run", false, "preview without making changes")
+	cmd.Flags().Bool("scan-only", false, "scan and report only, no prune or rebuild")
+	cmd.Flags().String("wing", "", "scope repair to a single wing")
+	return cmd
+}
+
+func newDedupCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "dedup",
+		Short: "Detect and remove near-duplicate drawers",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			w := cmd.OutOrStdout()
+			cfg, err := config.Load("")
+			if err != nil {
+				return fmt.Errorf("dedup: config load: %w", err)
+			}
+			palacePath := cfg.PalacePath
+			if flag := cmd.Flag("palace"); flag != nil && flag.Value.String() != "" {
+				palacePath = flag.Value.String()
+			}
+			dryRun, _ := cmd.Flags().GetBool("dry-run")
+			threshold, _ := cmd.Flags().GetFloat64("threshold")
+			wing, _ := cmd.Flags().GetString("wing")
+			source, _ := cmd.Flags().GetString("source")
+
+			emb, cleanup := buildEmbedder()
+			defer cleanup()
+			p, err := palace.Open(palacePath, emb)
+			if err != nil {
+				fmt.Fprintf(w, "\n  No palace found at %s\n", palacePath)
+				return nil
+			}
+			defer func() { _ = p.Close() }()
+
+			total, _ := p.Count()
+			mode := "LIVE"
+			if dryRun {
+				mode = "DRY RUN"
+			}
+			fmt.Fprintf(w, "\n%s\n  MemPalace Deduplicator\n%s\n", strings.Repeat("=", 55), strings.Repeat("=", 55))
+			fmt.Fprintf(w, "  Palace: %s\n", palacePath)
+			fmt.Fprintf(w, "  Drawers: %d\n", total)
+			fmt.Fprintf(w, "  Threshold: %.2f\n", threshold)
+			fmt.Fprintf(w, "  Mode: %s\n", mode)
+			if wing != "" {
+				fmt.Fprintf(w, "  Wing: %s\n", wing)
+			}
+			fmt.Fprintf(w, "%s\n", strings.Repeat("\u2500", 55))
+
+			opts := dedup.DedupOptions{
+				SourcePattern: source,
+				Wing:          wing,
+			}
+			deleted, err := dedup.Deduplicate(p, threshold, dryRun, opts)
+			if err != nil {
+				return fmt.Errorf("dedup: %w", err)
+			}
+
+			after, _ := p.Count()
+			fmt.Fprintf(w, "\n  Removed: %d duplicates\n", deleted)
+			fmt.Fprintf(w, "  Palace after: %d drawers\n", after)
+
+			if dryRun {
+				fmt.Fprintf(w, "\n  [DRY RUN] No changes written. Re-run without --dry-run to apply.\n")
+			}
+			fmt.Fprintln(w)
+			return nil
+		},
+	}
+	cmd.Flags().Bool("dry-run", false, "preview without deleting")
+	cmd.Flags().Float64("threshold", dedup.DefaultThreshold, "cosine distance threshold")
+	cmd.Flags().String("wing", "", "scope dedup to a single wing")
+	cmd.Flags().String("source", "", "filter by source file pattern")
+	return cmd
 }
 
 func newCompressCmd() *cobra.Command {

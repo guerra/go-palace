@@ -3,11 +3,13 @@ package searcher
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"path/filepath"
 	"strings"
 
 	"go-palace/internal/palace"
+	"go-palace/internal/sanitizer"
 )
 
 type SearchOptions struct {
@@ -34,7 +36,15 @@ func Search(p *palace.Palace, opts SearchOptions, w io.Writer) error {
 		n = 5
 	}
 
-	results, err := p.Query(opts.Query, palace.QueryOptions{
+	san := sanitizer.SanitizeQuery(opts.Query)
+	if san.WasSanitized {
+		slog.Warn("search query sanitized",
+			"original_length", san.OriginalLength,
+			"clean_length", san.CleanLength,
+			"method", san.Method)
+	}
+
+	results, err := p.Query(san.CleanQuery, palace.QueryOptions{
 		Wing:     opts.Wing,
 		Room:     opts.Room,
 		NResults: n,
@@ -97,7 +107,15 @@ func SearchMemories(p *palace.Palace, opts SearchOptions) ([]SearchResult, error
 		n = 5
 	}
 
-	results, err := p.Query(opts.Query, palace.QueryOptions{
+	san := sanitizer.SanitizeQuery(opts.Query)
+	if san.WasSanitized {
+		slog.Warn("search query sanitized",
+			"original_length", san.OriginalLength,
+			"clean_length", san.CleanLength,
+			"method", san.Method)
+	}
+
+	results, err := p.Query(san.CleanQuery, palace.QueryOptions{
 		Wing:     opts.Wing,
 		Room:     opts.Room,
 		NResults: n,

@@ -259,6 +259,43 @@ func (p *Palace) Get(opts GetOptions) ([]Drawer, error) {
 	return out, nil
 }
 
+// GetByIDs fetches specific drawers by their IDs. Unknown IDs are silently
+// skipped (no error). The returned slice preserves database order, not input
+// order.
+func (p *Palace) GetByIDs(ids []string) ([]Drawer, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := `SELECT id, document, wing, room, source_file, chunk_index,
+                added_by, filed_at, source_mtime, metadata_json
+              FROM drawers WHERE id IN (` + strings.Join(placeholders, ",") + `)
+              ORDER BY wing, room, source_file, chunk_index`
+	rows, err := p.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("palace: get_by_ids query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []Drawer
+	for rows.Next() {
+		d, err := scanDrawer(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("palace: get_by_ids rows: %w", err)
+	}
+	return out, nil
+}
+
 // Delete removes one drawer by id. Returns ErrNotFound if id did not exist.
 func (p *Palace) Delete(id string) error {
 	tx, err := p.db.Begin()
