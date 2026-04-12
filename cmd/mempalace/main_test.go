@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,7 +29,7 @@ func TestStatusCommand(t *testing.T) {
 
 func TestRootHasExpectedSubcommands(t *testing.T) {
 	root := newRootCmd()
-	want := map[string]bool{"status": false, "init": false, "mine": false, "search": false}
+	want := map[string]bool{"status": false, "init": false, "mine": false, "search": false, "wake-up": false}
 	for _, c := range root.Commands() {
 		if _, ok := want[c.Name()]; ok {
 			want[c.Name()] = true
@@ -43,14 +42,34 @@ func TestRootHasExpectedSubcommands(t *testing.T) {
 	}
 }
 
-func TestSearchStubReturnsErrNotImplemented(t *testing.T) {
+func TestSearchEmptyPalace(t *testing.T) {
+	palacePath := filepath.Join(t.TempDir(), "empty.db")
 	root := newRootCmd()
-	root.SetOut(&bytes.Buffer{})
-	root.SetErr(&bytes.Buffer{})
-	root.SetArgs([]string{"search", "hello"})
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"search", "hello", "--palace", palacePath})
 	err := root.Execute()
-	if !errors.Is(err, ErrNotImplementedPhaseA) {
-		t.Errorf("got %v, want ErrNotImplementedPhaseA", err)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "No results found") {
+		t.Errorf("expected 'No results found' in output: %s", out)
+	}
+}
+
+func TestRootHasWakeUpSubcommand(t *testing.T) {
+	root := newRootCmd()
+	found := false
+	for _, c := range root.Commands() {
+		if c.Name() == "wake-up" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("wake-up subcommand not registered")
 	}
 }
 
@@ -64,7 +83,7 @@ func TestHelpLists(t *testing.T) {
 		t.Fatalf("help: %v", err)
 	}
 	out := buf.String()
-	for _, want := range []string{"init", "mine", "search", "status"} {
+	for _, want := range []string{"init", "mine", "search", "status", "wake-up"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help missing %q: %s", want, out)
 		}

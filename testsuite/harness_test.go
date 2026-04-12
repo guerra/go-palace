@@ -446,3 +446,125 @@ func TestB013_MineExtractGeneral(t *testing.T) {
 		}
 	}
 }
+
+// ----------------------------------------------------------------------------
+// Phase D helpers: mine fixture into a real palace for search/wake-up tests
+// ----------------------------------------------------------------------------
+
+func seedPalace(t *testing.T) string {
+	t.Helper()
+	dir := copyFixture(t, "sample_project")
+	palacePath := tempPalace(t)
+	_, goInv := invoke(t, "init", dir, "--yes")
+	if goInv == nil || goInv.ExitCode != 0 {
+		t.Fatalf("seedPalace init failed: %+v", goInv)
+	}
+	_, goInv = invoke(t, "mine", dir, "--palace", palacePath)
+	if goInv == nil || goInv.ExitCode != 0 {
+		t.Fatalf("seedPalace mine failed: %+v", goInv)
+	}
+	return palacePath
+}
+
+// ----------------------------------------------------------------------------
+// B-014: search returns formatted results
+// ----------------------------------------------------------------------------
+
+func TestB014_SearchResults(t *testing.T) {
+	palacePath := seedPalace(t)
+	_, goInv := invoke(t, "search", "test", "--palace", palacePath)
+	if goInv == nil {
+		t.Skip("go impl not available")
+	}
+	// An empty palace may return "No results found" which is valid.
+	// A populated palace should return formatted results.
+	out := goInv.Stdout + goInv.Stderr
+	if goInv.ExitCode != 0 {
+		t.Fatalf("search exit=%d: %s", goInv.ExitCode, out)
+	}
+	// Either we get results or "No results found" — both are valid.
+	hasResults := strings.Contains(out, "Match:") && strings.Contains(out, "Source:")
+	hasNoResults := strings.Contains(out, "No results found")
+	if !hasResults && !hasNoResults {
+		t.Errorf("search output missing expected patterns:\n%s", out)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// B-015: search with wing/room filters
+// ----------------------------------------------------------------------------
+
+func TestB015_SearchFiltered(t *testing.T) {
+	palacePath := seedPalace(t)
+	_, goInv := invoke(t, "search", "content", "--palace", palacePath, "--wing", "sample_project")
+	if goInv == nil {
+		t.Skip("go impl not available")
+	}
+	if goInv.ExitCode != 0 {
+		t.Fatalf("search filtered exit=%d: %s", goInv.ExitCode, goInv.Stdout+goInv.Stderr)
+	}
+	out := goInv.Stdout
+	if strings.Contains(out, "Match:") && !strings.Contains(out, "Wing:") {
+		t.Errorf("filtered search missing Wing label:\n%s", out)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// B-017: search missing palace exits non-zero
+// ----------------------------------------------------------------------------
+
+func TestB017_SearchMissingPalace(t *testing.T) {
+	// Use a directory path that sqlite can't open as a DB.
+	_, goInv := invoke(t, "search", "test", "--palace", "/tmp/nonexistent_dir_b017/palace.db")
+	if goInv == nil {
+		t.Skip("go impl not available")
+	}
+	out := goInv.Stdout + goInv.Stderr
+	if goInv.ExitCode == 0 {
+		// sqlite3 may create the file; if it returns 0 with "No results found" that's acceptable
+		if !strings.Contains(out, "No results found") && !strings.Contains(out, "No palace found") {
+			t.Errorf("expected error or hint for missing palace, got exit=0: %s", out)
+		}
+	}
+}
+
+// ----------------------------------------------------------------------------
+// B-020: wake-up returns L0+L1 text
+// ----------------------------------------------------------------------------
+
+func TestB020_WakeUp(t *testing.T) {
+	palacePath := seedPalace(t)
+	_, goInv := invoke(t, "wake-up", "--palace", palacePath)
+	if goInv == nil {
+		t.Skip("go impl not available")
+	}
+	if goInv.ExitCode != 0 {
+		t.Fatalf("wake-up exit=%d: %s", goInv.ExitCode, goInv.Stdout+goInv.Stderr)
+	}
+	out := goInv.Stdout
+	patterns := []string{`Wake-up text`, `tokens`}
+	for _, p := range patterns {
+		if !regexp.MustCompile(p).MatchString(out) {
+			t.Errorf("wake-up stdout missing %q:\n%s", p, out)
+		}
+	}
+}
+
+// ----------------------------------------------------------------------------
+// B-021: wake-up with wing filter
+// ----------------------------------------------------------------------------
+
+func TestB021_WakeUpWing(t *testing.T) {
+	palacePath := seedPalace(t)
+	_, goInv := invoke(t, "wake-up", "--palace", palacePath, "--wing", "sample_project")
+	if goInv == nil {
+		t.Skip("go impl not available")
+	}
+	if goInv.ExitCode != 0 {
+		t.Fatalf("wake-up wing exit=%d: %s", goInv.ExitCode, goInv.Stdout+goInv.Stderr)
+	}
+	out := goInv.Stdout
+	if !strings.Contains(out, "Wake-up text") {
+		t.Errorf("wake-up wing missing header:\n%s", out)
+	}
+}

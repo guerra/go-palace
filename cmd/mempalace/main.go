@@ -1,12 +1,9 @@
 // Package main is the mempalace CLI entrypoint — a Cobra root that
-// dispatches to status / init / mine / search subcommands. Phase B
-// replaces the mine stub with a real miner call and adds init; search
-// stays on the Phase A sentinel until Phase C.
+// dispatches to status / init / mine / search / wake-up subcommands.
 package main
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -18,16 +15,13 @@ import (
 	"go-palace/internal/config"
 	"go-palace/internal/convominer"
 	"go-palace/internal/embed"
+	"go-palace/internal/layers"
 	"go-palace/internal/miner"
 	"go-palace/internal/palace"
 	"go-palace/internal/room"
+	"go-palace/internal/searcher"
 	"go-palace/version"
 )
-
-// ErrNotImplementedPhaseA is returned by stub subcommands that only prove
-// the CLI wiring works. Phase B replaces mine+init with real logic;
-// search still returns this sentinel until Phase C.
-var ErrNotImplementedPhaseA = errors.New("not implemented in Phase A: foundation only")
 
 func main() {
 	root := newRootCmd()
@@ -52,6 +46,7 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newInitCmd())
 	cmd.AddCommand(newMineCmd())
 	cmd.AddCommand(newSearchCmd())
+	cmd.AddCommand(newWakeUpCmd())
 	return cmd
 }
 
@@ -209,17 +204,49 @@ func newMineCmd() *cobra.Command {
 	return cmd
 }
 
-// newSearchCmd wires the search verb. Same stub pattern as Phase A —
-// TODO(phase-c): replace with real searcher.Search.
+// newSearchCmd wires the real search verb.
 func newSearchCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "search [query]",
-		Short: "Search the palace semantically (Phase A: stub)",
-		Args:  cobra.ArbitraryArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return phaseAStub(cmd, "search")
+		Short: "Search the palace semantically",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			query := strings.Join(args, " ")
+			cfg, err := config.Load("")
+			if err != nil {
+				return fmt.Errorf("search: config load: %w", err)
+			}
+			wing, _ := cmd.Flags().GetString("wing")
+			room, _ := cmd.Flags().GetString("room")
+			limit, _ := cmd.Flags().GetInt("limit")
+
+			palacePath := cfg.PalacePath
+			if flag := cmd.Flag("palace"); flag != nil && flag.Value.String() != "" {
+				palacePath = flag.Value.String()
+			}
+
+			emb := buildEmbedder()
+			p, err := palace.Open(palacePath, emb)
+			if err != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "\n  No palace found at %s\n  Run: mempalace init <dir> then mempalace mine <dir>\n", palacePath)
+				return fmt.Errorf("search: open palace: %w", err)
+			}
+			defer func() { _ = p.Close() }()
+
+			opts := searcher.SearchOptions{
+				Query:      query,
+				Wing:       wing,
+				Room:       room,
+				NResults:   limit,
+				PalacePath: palacePath,
+			}
+			return searcher.Search(p, opts, cmd.OutOrStdout())
 		},
 	}
+	cmd.Flags().String("wing", "", "filter by wing")
+	cmd.Flags().String("room", "", "filter by room")
+	cmd.Flags().Int("limit", 5, "max results to return")
+	return cmd
 }
 
 // buildEmbedder returns the real Python-subprocess embedder when
@@ -240,23 +267,47 @@ func buildEmbedder() embed.Embedder {
 	return e
 }
 
-// phaseAStub loads config, resolves the effective palace path, logs it, then
-// returns the sentinel. It does NOT open a palace or construct an embedder.
-func phaseAStub(cmd *cobra.Command, verb string) error {
-	cfg, err := config.Load("")
-	if err != nil {
-		return fmt.Errorf("phase-a %s: config load: %w", verb, err)
+func newWakeUpCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "wake-up",
+		Aliases: []string{"wakeup"},
+		Short:   "Show L0+L1 memory context",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := config.Load("")
+			if err != nil {
+				return fmt.Errorf("wake-up: config load: %w", err)
+			}
+			wing, _ := cmd.Flags().GetString("wing")
+
+			palacePath := cfg.PalacePath
+			if flag := cmd.Flag("palace"); flag != nil && flag.Value.String() != "" {
+				palacePath = flag.Value.String()
+			}
+
+			emb := buildEmbedder()
+			p, err := palace.Open(palacePath, emb)
+			if err != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "\n  No palace found at %s\n  Run: mempalace init <dir> then mempalace mine <dir>\n", palacePath)
+				return fmt.Errorf("wake-up: open palace: %w", err)
+			}
+			defer func() { _ = p.Close() }()
+
+			stack := layers.NewStack(p, "")
+			var text string
+			if wing != "" {
+				text = stack.WakeUpWing(wing)
+			} else {
+				text = stack.WakeUp()
+			}
+
+			w := cmd.OutOrStdout()
+			tokens := layers.TokenEstimate(text)
+			fmt.Fprintf(w, "Wake-up text (~%d tokens):\n%s\n%s\n", tokens, strings.Repeat("=", 50), text)
+			return nil
+		},
 	}
-	palacePath := cfg.PalacePath
-	if flag := cmd.Flag("palace"); flag != nil && flag.Value.String() != "" {
-		palacePath = flag.Value.String()
-	}
-	slog.Info("phase-a stub",
-		"verb", verb,
-		"palace_path", palacePath,
-		"collection", cfg.CollectionName,
-	)
-	return ErrNotImplementedPhaseA
+	cmd.Flags().String("wing", "", "filter L1 by wing")
+	return cmd
 }
 
 // projectNameFromDir mirrors Python's Path(dir).name.lower().replace(" ","_").replace("-","_").
