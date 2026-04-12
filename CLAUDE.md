@@ -30,6 +30,7 @@ make test           # Unit + integration tests
 make test/race      # Tests with race detector
 make test/cover     # Tests with coverage report (coverage.out)
 make test/suite     # Behavioral equivalence suite vs Python oracle (TODO)
+make test/semantic  # Semantic search quality tests (real embeddings, requires model)
 make lint           # golangci-lint run ./...
 make vet            # go vet ./...
 make tidy           # go mod tidy

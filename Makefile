@@ -63,6 +63,11 @@ tidy:
 test/embed:
 	go test -count=1 -tags=integration -run TestHugotEmbedder ./internal/embed/
 
+## test/semantic: run semantic search quality tests (requires model download)
+.PHONY: test/semantic
+test/semantic:
+	go test -count=1 -tags=integration -run TestSemantic ./testsuite/
+
 ## audit: full pipeline (tidy + vet + lint + test + build)
 .PHONY: audit
 audit: tidy vet lint test build
