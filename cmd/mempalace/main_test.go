@@ -181,3 +181,35 @@ func TestMineRequiresYaml(t *testing.T) {
 		t.Errorf("error %v missing 'mempalace init' hint", err)
 	}
 }
+
+func TestCompressDryRun(t *testing.T) {
+	palacePath := filepath.Join(t.TempDir(), "compress_test.db")
+	root := newRootCmd()
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"compress", "--dry-run", "--palace", palacePath})
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("compress dry-run: %v", err)
+	}
+	out := buf.String()
+	// Either "No palace" or "DRY RUN" with 0 drawers — both are valid
+	if !strings.Contains(out, "DRY RUN") && !strings.Contains(out, "No palace") {
+		t.Errorf("expected DRY RUN or No palace in output, got %q", out)
+	}
+}
+
+func TestCompressWithWingFilter(t *testing.T) {
+	palacePath := filepath.Join(t.TempDir(), "compress_wing.db")
+	root := newRootCmd()
+	buf := &bytes.Buffer{}
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"compress", "--dry-run", "--wing", "conversations", "--palace", palacePath})
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("compress with wing filter: %v", err)
+	}
+	// Should complete without error
+}

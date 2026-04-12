@@ -598,6 +598,7 @@ func newCompressCmd() *cobra.Command {
 			}
 			defer func() { _ = p.Close() }()
 
+			showStats, _ := cmd.Flags().GetBool("stats")
 			d := dialect.New(nil, nil)
 
 			where := map[string]string{}
@@ -606,18 +607,41 @@ func newCompressCmd() *cobra.Command {
 			}
 
 			offset := 0
-			compressed := 0
+			compressedCount := 0
+			totalOrigTokens := 0
+			totalCompTokens := 0
+			var batch []palace.Drawer
 			for {
 				drawers, err := p.Get(palace.GetOptions{Where: where, Limit: 100, Offset: offset})
 				if err != nil || len(drawers) == 0 {
 					break
 				}
 				for _, dr := range drawers {
-					result := d.Compress(dr.Document)
-					if dryRun {
-						fmt.Fprintf(w, "  %s: %d → %d bytes\n", dr.ID, len(dr.Document), len(result))
+					meta := map[string]string{
+						"wing":        dr.Wing,
+						"room":        dr.Room,
+						"source_file": dr.SourceFile,
 					}
-					compressed++
+					result := d.Compress(dr.Document, meta)
+					stats := d.CompressionStats(dr.Document, result)
+					totalOrigTokens += stats.OriginalTokensEst
+					totalCompTokens += stats.SummaryTokensEst
+
+					if dryRun || showStats {
+						fmt.Fprintf(w, "  %s: %d → %d bytes (~%d → ~%d tokens)\n",
+							dr.ID, len(dr.Document), len(result), stats.OriginalTokensEst, stats.SummaryTokensEst)
+					}
+					if !dryRun {
+						dr.Document = result
+						batch = append(batch, dr)
+					}
+					compressedCount++
+				}
+				if !dryRun && len(batch) > 0 {
+					if err := p.UpsertBatch(batch); err != nil {
+						return fmt.Errorf("compress: upsert: %w", err)
+					}
+					batch = batch[:0]
 				}
 				offset += len(drawers)
 				if len(drawers) < 100 {
@@ -625,15 +649,18 @@ func newCompressCmd() *cobra.Command {
 				}
 			}
 			if dryRun {
-				fmt.Fprintf(w, "\n  DRY RUN — would compress %d drawers\n", compressed)
+				fmt.Fprintf(w, "\n  DRY RUN — would compress %d drawers (~%d → ~%d tokens)\n",
+					compressedCount, totalOrigTokens, totalCompTokens)
 			} else {
-				fmt.Fprintf(w, "  Compressed %d drawers (dialect stub — no change)\n", compressed)
+				fmt.Fprintf(w, "  Compressed %d drawers (~%d → ~%d tokens)\n",
+					compressedCount, totalOrigTokens, totalCompTokens)
 			}
 			return nil
 		},
 	}
 	cmd.Flags().String("wing", "", "filter by wing")
 	cmd.Flags().Bool("dry-run", false, "show what would happen without changing drawers")
+	cmd.Flags().Bool("stats", false, "show per-drawer compression ratios")
 	return cmd
 }
 

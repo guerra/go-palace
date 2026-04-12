@@ -7,6 +7,8 @@ package spellcheck
 import (
 	"regexp"
 	"strings"
+	"sync"
+	"unicode"
 )
 
 // MinLength is the minimum token length to consider for spellchecking.
@@ -95,12 +97,150 @@ func EditDistance(a, b string) int {
 	return prev[len(rb)]
 }
 
-// SpellcheckUserText is the main spell-correction entry point.
-// STUB: returns text unchanged. The interface matches spellcheck.py:161-212
-// but actual correction logic is deferred to Phase F. When autocorrect is
-// not available in Python, it also returns text unchanged (spellcheck.py:44-45).
+// tokenRe splits text into whitespace-separated tokens, matching Python _TOKEN_RE.
+var tokenRe = regexp.MustCompile(`\S+`)
+
+// dictWords is the set of known English words (lowercase), loaded once.
+var (
+	dictOnce  sync.Once
+	dictWords map[string]bool
+)
+
+func loadDict() {
+	dictOnce.Do(func() {
+		dictWords = make(map[string]bool, len(wordFreqs))
+		for w := range wordFreqs {
+			dictWords[w] = true
+		}
+	})
+}
+
+// alphabet for candidate generation.
+const alphabet = "abcdefghijklmnopqrstuvwxyz"
+
+// edits1 generates all strings that are one edit distance from word.
+// Edits: deletes, transposes, replaces, inserts.
+func edits1(word string) []string {
+	runes := []rune(word)
+	n := len(runes)
+	var results []string
+
+	// Deletes
+	for i := 0; i < n; i++ {
+		results = append(results, string(runes[:i])+string(runes[i+1:]))
+	}
+	// Transposes
+	for i := 0; i < n-1; i++ {
+		r := make([]rune, n)
+		copy(r, runes)
+		r[i], r[i+1] = r[i+1], r[i]
+		results = append(results, string(r))
+	}
+	// Replaces
+	for i := 0; i < n; i++ {
+		for _, c := range alphabet {
+			if c != runes[i] {
+				r := make([]rune, n)
+				copy(r, runes)
+				r[i] = c
+				results = append(results, string(r))
+			}
+		}
+	}
+	// Inserts
+	for i := 0; i <= n; i++ {
+		for _, c := range alphabet {
+			results = append(results, string(runes[:i])+string(c)+string(runes[i:]))
+		}
+	}
+	return results
+}
+
+// knownCandidates filters candidates to words in the frequency dict and
+// returns the highest-frequency match.
+func bestCandidate(candidates []string) (string, bool) {
+	loadDict()
+	best := ""
+	bestFreq := 0
+	for _, c := range candidates {
+		if f, ok := wordFreqs[c]; ok && f > bestFreq {
+			best = c
+			bestFreq = f
+		}
+	}
+	return best, best != ""
+}
+
+// correct finds the best correction for a word using Norvig's algorithm.
+// Returns the word itself if it's already known or no correction found.
+func correct(word string) string {
+	loadDict()
+	lower := strings.ToLower(word)
+	// Already known
+	if dictWords[lower] {
+		return word
+	}
+	// Try edit distance 1
+	e1 := edits1(lower)
+	if best, ok := bestCandidate(e1); ok {
+		return best
+	}
+	// Try edit distance 2 (edits of edits)
+	seen := make(map[string]bool)
+	var e2 []string
+	for _, w := range e1 {
+		for _, w2 := range edits1(w) {
+			if !seen[w2] {
+				seen[w2] = true
+				e2 = append(e2, w2)
+			}
+		}
+	}
+	if best, ok := bestCandidate(e2); ok {
+		return best
+	}
+	return word
+}
+
+// SpellcheckUserText spell-corrects a user message. Port of spellcheck.py:161-212.
+// Norvig-style frequency-based correction with edit distance guards.
 func SpellcheckUserText(text string, knownNames map[string]bool) string {
-	return text
+	loadDict()
+
+	return tokenRe.ReplaceAllStringFunc(text, func(token string) string {
+		// Strip trailing punctuation for checking, reattach after
+		stripped := strings.TrimRight(token, ".,!?;:'\")")
+		punct := token[len(stripped):]
+
+		if stripped == "" || ShouldSkip(stripped, knownNames) {
+			return token
+		}
+
+		// Only correct lowercase words (capitalized = likely proper nouns)
+		firstRune := []rune(stripped)[0]
+		if unicode.IsUpper(firstRune) {
+			return token
+		}
+
+		// Skip words already in the dictionary
+		if dictWords[strings.ToLower(stripped)] {
+			return token
+		}
+
+		corrected := correct(stripped)
+		if corrected != stripped {
+			dist := EditDistance(stripped, corrected)
+			maxEdits := 2
+			if len(stripped) > 7 {
+				maxEdits = 3
+			}
+			if dist > maxEdits {
+				return token
+			}
+		}
+
+		return corrected + punct
+	})
 }
 
 // SpellcheckTranscriptLine spell-corrects a single transcript line.
