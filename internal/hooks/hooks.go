@@ -4,6 +4,7 @@
 package hooks
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -162,10 +163,15 @@ func countHumanMessages(transcriptPath string) int {
 	defer f.Close()
 
 	count := 0
-	dec := json.NewDecoder(f)
-	for dec.More() {
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
 		var entry map[string]any
-		if err := dec.Decode(&entry); err != nil {
+		if err := json.Unmarshal(line, &entry); err != nil {
 			continue
 		}
 
@@ -192,6 +198,9 @@ func countHumanMessages(transcriptPath string) int {
 			}
 		}
 	}
+	// Silently accept partial count on scanner error (I/O failure or
+	// oversized line). Transcript files are local and best-effort.
+	_ = scanner.Err()
 	return count
 }
 

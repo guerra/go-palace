@@ -142,3 +142,45 @@ func TestDetectConvoRoomArchitecture(t *testing.T) {
 		t.Errorf("expected architecture, got %s", room)
 	}
 }
+
+func TestDetectConvoRoomPlanning(t *testing.T) {
+	content := "We need to plan the roadmap for the next sprint and set milestone deadlines"
+	room := DetectConvoRoom(content)
+	if room != "planning" {
+		t.Errorf("expected planning, got %s", room)
+	}
+}
+
+func TestDetectConvoRoomDecisions(t *testing.T) {
+	content := "We decided to switch and migrated to the new framework after we chose it and picked the alternative approach"
+	room := DetectConvoRoom(content)
+	if room != "decisions" {
+		t.Errorf("expected decisions, got %s", room)
+	}
+}
+
+func TestDetectConvoRoomProblems(t *testing.T) {
+	content := "The problem was a crash that failed and we found a workaround to fix the broken issue and resolved the stuck situation"
+	room := DetectConvoRoom(content)
+	if room != "problems" {
+		t.Errorf("expected problems, got %s", room)
+	}
+}
+
+func TestChunkExchangesEmpty(t *testing.T) {
+	chunks := ChunkExchanges("")
+	if len(chunks) != 0 {
+		t.Errorf("expected 0 chunks from empty content, got %d", len(chunks))
+	}
+}
+
+func TestScanConvosEmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	files, err := ScanConvos(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 0 {
+		t.Errorf("expected 0 files in empty dir, got %d", len(files))
+	}
+}

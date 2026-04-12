@@ -157,6 +157,132 @@ func TestSearchMemoriesEmpty(t *testing.T) {
 	}
 }
 
+func TestSearchFilteredByWingAndRoom(t *testing.T) {
+	p := setupTestPalace(t)
+	var buf bytes.Buffer
+	opts := searcher.SearchOptions{Query: "test", Wing: "proj_a", Room: "docs", NResults: 10}
+	if err := searcher.Search(p, opts, &buf); err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Wing: proj_a") {
+		t.Errorf("missing wing label:\n%s", out)
+	}
+	if !strings.Contains(out, "Room: docs") {
+		t.Errorf("missing room label:\n%s", out)
+	}
+}
+
+func TestSearchNResults(t *testing.T) {
+	p := setupTestPalace(t)
+	var buf bytes.Buffer
+	opts := searcher.SearchOptions{Query: "code", NResults: 1}
+	if err := searcher.Search(p, opts, &buf); err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "[1]") {
+		t.Errorf("expected at least one result block:\n%s", out)
+	}
+}
+
+func TestSearchMemoriesWingFilter(t *testing.T) {
+	p := setupTestPalace(t)
+	results, err := searcher.SearchMemories(p, searcher.SearchOptions{Query: "test", Wing: "proj_a", NResults: 10})
+	if err != nil {
+		t.Fatalf("search_memories: %v", err)
+	}
+	for _, r := range results {
+		if r.Wing != "proj_a" {
+			t.Errorf("expected wing=proj_a, got %q", r.Wing)
+		}
+	}
+}
+
+func TestSearchMemoriesRoomFilter(t *testing.T) {
+	p := setupTestPalace(t)
+	results, err := searcher.SearchMemories(p, searcher.SearchOptions{Query: "test", Room: "docs", NResults: 10})
+	if err != nil {
+		t.Fatalf("search_memories: %v", err)
+	}
+	for _, r := range results {
+		if r.Room != "docs" {
+			t.Errorf("expected room=docs, got %q", r.Room)
+		}
+	}
+}
+
+func TestSearchMemoriesBothFilters(t *testing.T) {
+	p := setupTestPalace(t)
+	results, err := searcher.SearchMemories(p, searcher.SearchOptions{
+		Query: "test", Wing: "proj_a", Room: "docs", NResults: 10,
+	})
+	if err != nil {
+		t.Fatalf("search_memories: %v", err)
+	}
+	for _, r := range results {
+		if r.Wing != "proj_a" || r.Room != "docs" {
+			t.Errorf("expected wing=proj_a room=docs, got wing=%q room=%q", r.Wing, r.Room)
+		}
+	}
+}
+
+func TestSearchMemoriesResultFields(t *testing.T) {
+	p := setupTestPalace(t)
+	results, err := searcher.SearchMemories(p, searcher.SearchOptions{Query: "documentation", NResults: 5})
+	if err != nil {
+		t.Fatalf("search_memories: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected results")
+	}
+	r := results[0]
+	if r.Text == "" {
+		t.Error("text empty")
+	}
+	if r.Wing == "" {
+		t.Error("wing empty")
+	}
+	if r.Room == "" {
+		t.Error("room empty")
+	}
+	if r.SourceFile == "" {
+		t.Error("source_file empty")
+	}
+	// Similarity is a float64 (value depends on embedder; FakeEmbedder may return raw distances).
+	// Just verify it's a number (non-NaN).
+	if r.Similarity != r.Similarity { // NaN check
+		t.Error("similarity is NaN")
+	}
+}
+
+func TestSearchMemoriesNResultsLimit(t *testing.T) {
+	p := setupTestPalace(t)
+	results, err := searcher.SearchMemories(p, searcher.SearchOptions{Query: "code", NResults: 2})
+	if err != nil {
+		t.Fatalf("search_memories: %v", err)
+	}
+	if len(results) > 2 {
+		t.Errorf("expected <= 2 results, got %d", len(results))
+	}
+}
+
+func TestSearchFormattedOutputWithWingAndRoom(t *testing.T) {
+	p := setupTestPalace(t)
+	var buf bytes.Buffer
+	opts := searcher.SearchOptions{Query: "test", Wing: "proj_a", Room: "code", NResults: 5}
+	if err := searcher.Search(p, opts, &buf); err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Wing: proj_a") {
+		t.Errorf("missing Wing label:\n%s", out)
+	}
+	if !strings.Contains(out, "Room: code") {
+		t.Errorf("missing Room label:\n%s", out)
+	}
+}
+
 func TestSearchSourceFileBasename(t *testing.T) {
 	p := setupTestPalace(t)
 	results, err := searcher.SearchMemories(p, searcher.SearchOptions{Query: "design API", NResults: 5})
