@@ -1,15 +1,44 @@
+# Build artifacts
 bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
 *.test
 *.out
 coverage.out
 coverage.html
+
+# Environment
 .env
 .env.local
-.DS_Store
 
+# OS
+.DS_Store
+Thumbs.db
+
+# Internal agent state
 .agents/
 
+# Database files
 *.db
 *.sqlite
 *.sqlite3
+
+# Test temp files
 testdata/tmp/
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Embedding models (large binaries)
+models/
+.claude/docs/
+docs/

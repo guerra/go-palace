@@ -3,9 +3,8 @@
 Port of Python [MemPalace](https://github.com/) to Go. Local-first memory palace for AI agents: project/conversation mining, semantic search via sqlite-vec, 4-layer memory stack, knowledge graph, and MCP server.
 
 **Source of truth:**
-- `mempalace-go-plan-result.md` — full migration plan (behavioral contracts, Go architecture, package layout, ADRs)
-- `mempalace-go-test-suite-result.md` — black-box behavioral equivalence suite (Python oracle ↔ Go)
-- Python reference impl at `~/projects/pessoal/mempalace-ref/mempalace/`
+- `docs/design/migration-plan.md` — full migration plan (behavioral contracts, Go architecture, package layout, ADRs)
+- `docs/design/test-suite-spec.md` — black-box behavioral equivalence suite (Python oracle ↔ Go)
 
 ## Stack
 
@@ -80,7 +79,7 @@ mcp/                  # MCP server (public)
 version/              # Version constant
 ```
 
-Package design details in `mempalace-go-plan-result.md` Phase 2.
+Package design details in `docs/design/migration-plan.md` Phase 2.
 
 > Full module map, data flows, ADRs, and scaling assessment: `.agents/arch/system.arch.md`
 
@@ -96,7 +95,6 @@ Project rules live in `.claude/rules/`. Mandatory rules load automatically; path
 | `go-concurrency.md` | path-scoped | `**/*.go` | Context scopes, errgroup, worker pools, shutdown |
 | `testing.md` | path-scoped | `**/*_test.go` | Behavioral equivalence suite, golden files, determinism |
 
-## Reference Projects
+## Reference
 
-- `~/projects/pessoal/meu-condominio/` — Go backend reference (stack + rule source)
-- `~/projects/pessoal/sinnema/` — Go backend reference (puro engine pattern)
+- Python MemPalace — the original implementation this project was ported from
