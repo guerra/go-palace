@@ -128,6 +128,14 @@ func Mine(opts MineOptions, p *palace.Palace) error {
 			continue
 		}
 
+		// SEC-014: open with O_NOFOLLOW to prevent TOCTOU symlink swap between
+		// scan and read. If the path became a symlink after scanning, this fails.
+		if err := verifyNotSymlink(src); err != nil {
+			slog.Debug("mine: skip file (symlink check)", "file", src, "err", err)
+			filesSkipped++
+			continue
+		}
+
 		content, err := normalize.Normalize(src)
 		if err != nil {
 			slog.Debug("mine: skip file (normalize error)", "file", src, "err", err)

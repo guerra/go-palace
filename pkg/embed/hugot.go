@@ -1,7 +1,10 @@
 package embed
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -15,6 +18,16 @@ const (
 	defaultModelName = "sentence-transformers/all-MiniLM-L6-v2"
 	defaultModelDir  = ".mempalace/models"
 	pipelineName     = "mempalace-embed"
+
+	// expectedModelSHA256 is the SHA-256 hash of the canonical onnx/model.onnx
+	// for sentence-transformers/all-MiniLM-L6-v2. Set to empty string to skip
+	// verification (not recommended). If the model changes upstream, compute the
+	// new hash with: sha256sum ~/.mempalace/models/sentence-transformers_all-MiniLM-L6-v2/onnx/model.onnx
+	// and update this constant.
+	//
+	// TODO: populate with the actual hash once the model is downloaded for the
+	// first time. Until then, verification logs a warning instead of rejecting.
+	expectedModelSHA256 = ""
 )
 
 // HugotOptions configures the HugotEmbedder.
@@ -157,11 +170,14 @@ func resolveModelPath(modelName, modelDir string) (string, error) {
 	modelPath := filepath.Join(modelDir, dirName)
 
 	if hasONNXModel(modelPath) {
+		if err := verifyModelHash(modelPath); err != nil {
+			return "", err
+		}
 		return modelPath, nil
 	}
 
 	slog.Info("downloading model (first use)", "model", modelName, "dest", modelDir)
-	if err := os.MkdirAll(modelDir, 0o755); err != nil {
+	if err := os.MkdirAll(modelDir, 0o700); err != nil {
 		return "", fmt.Errorf("create model dir: %w", err)
 	}
 
@@ -171,6 +187,10 @@ func resolveModelPath(modelName, modelDir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("download model %s: %w", modelName, err)
 	}
+	if err := verifyModelHash(downloaded); err != nil {
+		_ = os.RemoveAll(downloaded)
+		return "", err
+	}
 	slog.Info("model ready", "path", downloaded)
 	return downloaded, nil
 }
@@ -179,4 +199,46 @@ func resolveModelPath(modelName, modelDir string) (string, error) {
 func hasONNXModel(dir string) bool {
 	_, err := os.Stat(filepath.Join(dir, "onnx", "model.onnx"))
 	return err == nil
+}
+
+// VerifyModel checks the SHA-256 hash of the ONNX model file at modelPath.
+// Returns nil if the hash matches expectedModelSHA256, or if no expected hash
+// is configured (logs a warning in that case).
+func VerifyModel(modelPath string) error {
+	return verifyModelHash(modelPath)
+}
+
+func verifyModelHash(modelPath string) error {
+	onnxPath := filepath.Join(modelPath, "onnx", "model.onnx")
+	if expectedModelSHA256 == "" {
+		slog.Warn("model checksum verification skipped: no expected hash configured",
+			"path", onnxPath,
+			"action", "set expectedModelSHA256 in pkg/embed/hugot.go")
+		return nil
+	}
+
+	got, err := fileSHA256(onnxPath)
+	if err != nil {
+		return fmt.Errorf("embed: compute model hash: %w", err)
+	}
+	if got != expectedModelSHA256 {
+		return fmt.Errorf("embed: model integrity check failed: expected SHA-256 %s, got %s (file: %s). "+
+			"The model may have been tampered with. Delete %s and re-download, or update expectedModelSHA256 in pkg/embed/hugot.go",
+			expectedModelSHA256, got, onnxPath, modelPath)
+	}
+	slog.Info("model integrity verified", "sha256", got[:16]+"...")
+	return nil
+}
+
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

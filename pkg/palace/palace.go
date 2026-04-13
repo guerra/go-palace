@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -118,6 +119,11 @@ func Open(path string, e embed.Embedder) (*Palace, error) {
 	db, err := sql.Open("sqlite3", path)
 	if err != nil {
 		return nil, fmt.Errorf("%w: open %s: %v", ErrNoPalace, path, err)
+	}
+	// Restrict palace DB to owner-only (go-sqlite3 creates with umask defaults).
+	if err := os.Chmod(path, 0o600); err != nil && !os.IsNotExist(err) {
+		_ = db.Close()
+		return nil, fmt.Errorf("palace: chmod %s: %w", path, err)
 	}
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		_ = db.Close()

@@ -43,6 +43,22 @@ make test/semantic
 3. Run `make audit` — all checks must pass.
 4. Open a pull request with a clear description of what and why.
 
+## Binary artifact verification
+
+The project depends on pre-compiled binary artifacts that cannot be audited from source:
+
+- **libtokenizers.a** (Rust FFI, from `daulet/tokenizers` GitHub Releases)
+- **libonnxruntime.so** (C++, from Microsoft ONNX Runtime releases)
+
+When updating these dependencies, record the SHA-256 hash of the binary in
+the pull request description so reviewers can cross-check against upstream
+release artifacts:
+
+```bash
+sha256sum libtokenizers.a
+sha256sum /usr/local/lib/libonnxruntime.so
+```
+
 ## Reporting issues
 
 Open a GitHub issue with:

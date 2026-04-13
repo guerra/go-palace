@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +12,10 @@ import (
 )
 
 const datasetURL = "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json"
+
+// expectedDatasetSHA256 is the SHA-256 hash of the canonical dataset file.
+// TODO: populate after first download with: sha256sum longmemeval_s_cleaned.json
+const expectedDatasetSHA256 = ""
 
 // Turn is a single dialogue turn in a haystack session.
 type Turn struct {
@@ -66,11 +72,21 @@ func EnsureDataset(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("create dataset file: %w", err)
 	}
-	defer out.Close()
 
-	if _, err := io.Copy(out, resp.Body); err != nil {
+	h := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(out, h), resp.Body); err != nil {
+		_ = out.Close()
 		_ = os.Remove(path)
 		return "", fmt.Errorf("write dataset: %w", err)
+	}
+	_ = out.Close()
+
+	if expectedDatasetSHA256 != "" {
+		got := hex.EncodeToString(h.Sum(nil))
+		if got != expectedDatasetSHA256 {
+			_ = os.Remove(path)
+			return "", fmt.Errorf("dataset integrity check failed: expected SHA-256 %s, got %s", expectedDatasetSHA256, got)
+		}
 	}
 	fmt.Println("  Download complete.")
 	return path, nil

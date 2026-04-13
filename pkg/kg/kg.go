@@ -65,7 +65,7 @@ type KGStats struct {
 
 // Open opens or creates a knowledge graph database at dbPath.
 func Open(dbPath string) (*KG, error) {
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
 		return nil, fmt.Errorf("kg: mkdir: %w", err)
 	}
 	db, err := sql.Open("sqlite3", dbPath)
@@ -124,7 +124,9 @@ func (kg *KG) Close() error {
 	return kg.db.Close()
 }
 
-// EntityID normalises a name to an entity ID: lowercase, spaces→underscores, remove apostrophes.
+// EntityID normalises a name to an entity ID: lowercase, spaces to underscores, remove apostrophes.
+// The transform is lossy: distinct names may collide (e.g. "O'Brien" and "OBrien" both map to
+// "obrien"). Callers that create entities should be aware that collisions cause silent merges.
 func EntityID(name string) string {
 	return strings.NewReplacer(" ", "_", "'", "").Replace(strings.ToLower(name))
 }

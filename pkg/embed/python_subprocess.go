@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -150,6 +151,17 @@ func buildCmd(opts PythonSubprocessOptions) (*exec.Cmd, error) {
 	}
 	if dir == "" {
 		return nil, ErrMempalaceDirUnset
+	}
+	// Validate that dir exists, is a directory, and contains expected project structure.
+	info, err := os.Stat(dir)
+	if err != nil {
+		return nil, fmt.Errorf("embed: MEMPALACE_PY_DIR %q: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("embed: MEMPALACE_PY_DIR %q is not a directory", dir)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "pyproject.toml")); err != nil {
+		return nil, fmt.Errorf("embed: MEMPALACE_PY_DIR %q missing pyproject.toml — expected a mempalace checkout", dir)
 	}
 	return exec.Command(uv, "run", "--directory", dir, "python", "-c", pythonScript), nil //nolint:gosec
 }

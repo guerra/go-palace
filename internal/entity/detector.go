@@ -652,7 +652,7 @@ func SaveEntities(dir string, people, projects []string) error {
 		return fmt.Errorf("entity: marshal: %w", err)
 	}
 	path := filepath.Join(dir, "entities.json")
-	return os.WriteFile(path, append(b, '\n'), 0o644)
+	return os.WriteFile(path, append(b, '\n'), 0o600)
 }
 
 func roundTo2(f float64) float64 {

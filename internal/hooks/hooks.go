@@ -87,7 +87,7 @@ func RunHook(hookName, harness string, stdin io.Reader, stdout io.Writer) error 
 
 func hookSessionStart(input HookInput, stdout io.Writer) error {
 	logEntry(fmt.Sprintf("SESSION START for session %s", input.SessionID))
-	_ = os.MkdirAll(stateDir(), 0o755)
+	_ = os.MkdirAll(stateDir(), 0o700)
 	writeOutput(stdout, HookOutput{})
 	return nil
 }
@@ -108,7 +108,7 @@ func hookStop(input HookInput, stdout io.Writer) error {
 	exchangeCount := countHumanMessages(input.TranscriptPath)
 
 	dir := stateDir()
-	_ = os.MkdirAll(dir, 0o755)
+	_ = os.MkdirAll(dir, 0o700)
 	lastSaveFile := filepath.Join(dir, input.SessionID+"_last_save")
 
 	lastSave := 0
@@ -123,7 +123,7 @@ func hookStop(input HookInput, stdout io.Writer) error {
 		input.SessionID, exchangeCount, sinceLast))
 
 	if sinceLast >= SaveInterval && exchangeCount > 0 {
-		_ = os.WriteFile(lastSaveFile, []byte(strconv.Itoa(exchangeCount)), 0o644)
+		_ = os.WriteFile(lastSaveFile, []byte(strconv.Itoa(exchangeCount)), 0o600)
 		logEntry(fmt.Sprintf("TRIGGERING SAVE at exchange %d", exchangeCount))
 		writeOutput(stdout, HookOutput{Decision: "block", Reason: StopBlockReason})
 	} else {
@@ -236,10 +236,10 @@ func writeOutput(w io.Writer, out HookOutput) {
 
 func logEntry(message string) {
 	dir := stateDir()
-	_ = os.MkdirAll(dir, 0o755)
+	_ = os.MkdirAll(dir, 0o700)
 	logPath := filepath.Join(dir, "hook.log")
 	ts := time.Now().Format("15:04:05")
-	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}

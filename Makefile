@@ -11,6 +11,8 @@ help:
 	@awk 'BEGIN{FS=":.*?## "} /^##/ {sub(/^## /,""); print}' $(MAKEFILE_LIST)
 
 ## run: run CLI (pass ARGS="status" etc)
+## WARNING: $(ARGS) is interpolated directly into the shell command.
+## Never pass untrusted input via ARGS in automated systems.
 .PHONY: run
 run:
 	go run ./cmd/mempalace $(ARGS)
