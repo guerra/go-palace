@@ -68,6 +68,11 @@ test/embed:
 test/semantic:
 	go test -count=1 -tags=integration -run TestSemantic ./testsuite/
 
+## bench/longmemeval: run LongMemEval benchmark
+.PHONY: bench/longmemeval
+bench/longmemeval:
+	go run ./benchmarks/longmemeval $(ARGS)
+
 ## audit: full pipeline (tidy + vet + lint + test + build)
 .PHONY: audit
 audit: tidy vet lint test build
