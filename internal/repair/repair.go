@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"go-palace/pkg/palace"
+	"github.com/guerra/go-palace/pkg/palace"
 )
 
 // ScanResult holds the output of a palace scan.

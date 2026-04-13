@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"go-palace/internal/graph"
-	"go-palace/pkg/embed"
-	"go-palace/pkg/palace"
+	"github.com/guerra/go-palace/internal/graph"
+	"github.com/guerra/go-palace/pkg/embed"
+	"github.com/guerra/go-palace/pkg/palace"
 )
 
 func setupGraphPalace(t *testing.T) *palace.Palace {

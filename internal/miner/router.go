@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"go-palace/internal/room"
+	"github.com/guerra/go-palace/internal/room"
 )
 
 // DetectRoom routes one file to a room using the four-priority chain

@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	"go-palace/pkg/embed"
+	"github.com/guerra/go-palace/pkg/embed"
 )
 
 func newTestEmbedder(t *testing.T) *embed.HugotEmbedder {

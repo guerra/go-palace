@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"go-palace/pkg/palace"
+	"github.com/guerra/go-palace/pkg/palace"
 )
 
 const (

@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"go-palace/pkg/config"
-	"go-palace/pkg/kg"
-	"go-palace/pkg/palace"
-	"go-palace/version"
+	"github.com/guerra/go-palace/pkg/config"
+	"github.com/guerra/go-palace/pkg/kg"
+	"github.com/guerra/go-palace/pkg/palace"
+	"github.com/guerra/go-palace/version"
 )
 
 // OpenKGForMCP opens the KG database. Exposed for cmd/mempalace to call

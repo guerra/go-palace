@@ -1,4 +1,4 @@
-module go-palace
+module github.com/guerra/go-palace
 
 go 1.26.2
 

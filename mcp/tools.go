@@ -10,10 +10,10 @@ import (
 	"time"
 	"unicode"
 
-	"go-palace/internal/graph"
-	"go-palace/pkg/kg"
-	"go-palace/pkg/palace"
-	"go-palace/pkg/searcher"
+	"github.com/guerra/go-palace/internal/graph"
+	"github.com/guerra/go-palace/pkg/kg"
+	"github.com/guerra/go-palace/pkg/palace"
+	"github.com/guerra/go-palace/pkg/searcher"
 )
 
 // toolHandler is the signature for all tool dispatch functions.

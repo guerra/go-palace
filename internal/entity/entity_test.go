@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"go-palace/internal/entity"
+	"github.com/guerra/go-palace/internal/entity"
 )
 
 const sampleText = `

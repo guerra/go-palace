@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"go-palace/internal/normalize"
-	"go-palace/internal/room"
-	"go-palace/pkg/palace"
+	"github.com/guerra/go-palace/internal/normalize"
+	"github.com/guerra/go-palace/internal/room"
+	"github.com/guerra/go-palace/pkg/palace"
 )
 
 // MineOptions configures one Mine() invocation. Workers is a RESERVED

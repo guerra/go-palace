@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"go-palace/pkg/kg"
+	"github.com/guerra/go-palace/pkg/kg"
 
 	_ "github.com/mattn/go-sqlite3"
 )

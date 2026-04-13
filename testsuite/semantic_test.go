@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"go-palace/pkg/embed"
-	"go-palace/pkg/layers"
-	"go-palace/pkg/palace"
+	"github.com/guerra/go-palace/pkg/embed"
+	"github.com/guerra/go-palace/pkg/layers"
+	"github.com/guerra/go-palace/pkg/palace"
 )
 
 // newSemanticEmbedder mirrors internal/embed/hugot_test.go:newTestEmbedder.

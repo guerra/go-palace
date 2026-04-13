@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"go-palace/internal/extractor"
-	"go-palace/internal/normalize"
-	"go-palace/pkg/palace"
+	"github.com/guerra/go-palace/internal/extractor"
+	"github.com/guerra/go-palace/internal/normalize"
+	"github.com/guerra/go-palace/pkg/palace"
 )
 
 // File type and size constants — ported from convo_miner.py:23-31.

@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"go-palace/pkg/palace"
-	"go-palace/pkg/sanitizer"
+	"github.com/guerra/go-palace/pkg/palace"
+	"github.com/guerra/go-palace/pkg/sanitizer"
 )
 
 type SearchOptions struct {

@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"go-palace/internal/room"
-	"go-palace/pkg/embed"
-	"go-palace/pkg/palace"
+	"github.com/guerra/go-palace/internal/room"
+	"github.com/guerra/go-palace/pkg/embed"
+	"github.com/guerra/go-palace/pkg/palace"
 )
 
 // ---- chunker ---------------------------------------------------------------

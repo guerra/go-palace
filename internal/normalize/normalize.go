@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"go-palace/internal/spellcheck"
+	"github.com/guerra/go-palace/internal/spellcheck"
 )
 
 // MaxFileSize is the safety cap borrowed from mempalace/normalize.py:32 —

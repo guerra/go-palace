@@ -20,7 +20,7 @@ linters:
 
 linters-settings:
   goimports:
-    local-prefixes: go-palace
+    local-prefixes: github.com/guerra/go-palace
   revive:
     rules:
       - name: var-naming

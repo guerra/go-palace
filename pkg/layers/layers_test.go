@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"go-palace/pkg/embed"
-	"go-palace/pkg/layers"
-	"go-palace/pkg/palace"
+	"github.com/guerra/go-palace/pkg/embed"
+	"github.com/guerra/go-palace/pkg/layers"
+	"github.com/guerra/go-palace/pkg/palace"
 )
 
 func setupTestPalace(t *testing.T) *palace.Palace {

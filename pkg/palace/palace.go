@@ -17,7 +17,7 @@ import (
 	vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
 	_ "github.com/mattn/go-sqlite3"
 
-	"go-palace/pkg/embed"
+	"github.com/guerra/go-palace/pkg/embed"
 )
 
 // Sentinel errors returned by the palace API.
