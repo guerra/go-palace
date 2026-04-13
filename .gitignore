@@ -42,3 +42,4 @@ testdata/tmp/
 models/
 .claude/docs/
 docs/
+longmemeval_s_cleaned.json

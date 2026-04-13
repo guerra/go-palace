@@ -33,9 +33,10 @@ type HugotOptions struct {
 // It uses the GoMLX backend (no CGO beyond sqlite-vec) and downloads the
 // model on first use.
 type HugotEmbedder struct {
-	pipeline *pipelines.FeatureExtractionPipeline
-	session  *hugot.Session
-	dim      int
+	pipeline        *pipelines.FeatureExtractionPipeline
+	session         *hugot.Session
+	dim             int
+	needsTruncation bool
 }
 
 // NewHugotEmbedder creates a HugotEmbedder. It initializes a GoSession,
@@ -55,15 +56,16 @@ func NewHugotEmbedder(opts HugotOptions) (*HugotEmbedder, error) {
 		modelPath = resolved
 	}
 
-	session, err := hugot.NewGoSession()
+	session, err := newHugotSession()
 	if err != nil {
 		return nil, fmt.Errorf("embed: create go session: %w", err)
 	}
 
 	pipeline, err := hugot.NewPipeline(session, hugot.FeatureExtractionConfig{
-		ModelPath: modelPath,
-		Name:      pipelineName,
-		Options:   []hugot.FeatureExtractionOption{pipelines.WithNormalization()},
+		ModelPath:    modelPath,
+		Name:         pipelineName,
+		OnnxFilename: "onnx/model.onnx",
+		Options:      []hugot.FeatureExtractionOption{pipelines.WithNormalization()},
 	})
 	if err != nil {
 		_ = session.Destroy()
@@ -82,13 +84,21 @@ func NewHugotEmbedder(opts HugotOptions) (*HugotEmbedder, error) {
 	}
 
 	return &HugotEmbedder{
-		pipeline: pipeline,
-		session:  session,
-		dim:      dim,
+		pipeline:        pipeline,
+		session:         session,
+		dim:             dim,
+		needsTruncation: needsGoMLXTruncation(),
 	}, nil
 }
 
 func (h *HugotEmbedder) Dimension() int { return h.dim }
+
+const maxBatchSize = 32
+
+// maxCharsGoMLX is the safety truncation limit for the pure-Go GoMLX backend,
+// which does not truncate internally and crashes on sequences > 512 tokens.
+// ORT backend truncates via the Rust tokenizer, so this is not needed there.
+const maxCharsGoMLX = 1500
 
 func (h *HugotEmbedder) Embed(texts []string) ([][]float32, error) {
 	if texts == nil {
@@ -97,11 +107,32 @@ func (h *HugotEmbedder) Embed(texts []string) ([][]float32, error) {
 	if len(texts) == 0 {
 		return [][]float32{}, nil
 	}
-	result, err := h.pipeline.RunPipeline(texts)
-	if err != nil {
-		return nil, fmt.Errorf("embed: run pipeline: %w", err)
+
+	input := texts
+	if h.needsTruncation {
+		input = make([]string, len(texts))
+		for i, t := range texts {
+			if len(t) > maxCharsGoMLX {
+				input[i] = t[:maxCharsGoMLX]
+			} else {
+				input[i] = t
+			}
+		}
 	}
-	return result.Embeddings, nil
+
+	all := make([][]float32, 0, len(input))
+	for start := 0; start < len(input); start += maxBatchSize {
+		end := start + maxBatchSize
+		if end > len(input) {
+			end = len(input)
+		}
+		result, err := h.pipeline.RunPipeline(input[start:end])
+		if err != nil {
+			return nil, fmt.Errorf("embed: run pipeline: %w", err)
+		}
+		all = append(all, result.Embeddings...)
+	}
+	return all, nil
 }
 
 // Close destroys the hugot session and frees resources.
@@ -135,6 +166,7 @@ func resolveModelPath(modelName, modelDir string) (string, error) {
 	}
 
 	downloadOpts := hugot.NewDownloadOptions()
+	downloadOpts.OnnxFilePath = "onnx/model.onnx"
 	downloaded, err := hugot.DownloadModel(modelName, modelDir, downloadOpts)
 	if err != nil {
 		return "", fmt.Errorf("download model %s: %w", modelName, err)
@@ -143,16 +175,8 @@ func resolveModelPath(modelName, modelDir string) (string, error) {
 	return downloaded, nil
 }
 
-// hasONNXModel checks if the directory contains at least one .onnx file.
+// hasONNXModel checks if the model directory has the expected ONNX file.
 func hasONNXModel(dir string) bool {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return false
-	}
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".onnx") {
-			return true
-		}
-	}
-	return false
+	_, err := os.Stat(filepath.Join(dir, "onnx", "model.onnx"))
+	return err == nil
 }

@@ -19,10 +19,10 @@ type rankedItem struct {
 }
 
 type resultEntry struct {
-	QuestionID   string `json:"question_id"`
-	QuestionType string `json:"question_type"`
-	Question     string `json:"question"`
-	Answer       string `json:"answer"`
+	QuestionID   string          `json:"question_id"`
+	QuestionType string          `json:"question_type"`
+	Question     string          `json:"question"`
+	Answer       json.RawMessage `json:"answer"`
 	Retrieval    struct {
 		Query       string       `json:"query"`
 		RankedItems []rankedItem `json:"ranked_items"`
