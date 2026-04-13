@@ -25,9 +25,7 @@ const (
 	// new hash with: sha256sum ~/.mempalace/models/sentence-transformers_all-MiniLM-L6-v2/onnx/model.onnx
 	// and update this constant.
 	//
-	// TODO: populate with the actual hash once the model is downloaded for the
-	// first time. Until then, verification logs a warning instead of rejecting.
-	expectedModelSHA256 = ""
+	expectedModelSHA256 = "6fd5d72fe4589f189f8ebc006442dbb529bb7ce38f8082112682524616046452"
 )
 
 // HugotOptions configures the HugotEmbedder.
@@ -195,9 +193,19 @@ func resolveModelPath(modelName, modelDir string) (string, error) {
 	return downloaded, nil
 }
 
+// findONNXModel returns the path to the ONNX model file, checking both
+// root (hugot default) and onnx/ subdirectory layouts.
+func findONNXModel(dir string) string {
+	root := filepath.Join(dir, "model.onnx")
+	if _, err := os.Stat(root); err == nil {
+		return root
+	}
+	return filepath.Join(dir, "onnx", "model.onnx")
+}
+
 // hasONNXModel checks if the model directory has the expected ONNX file.
 func hasONNXModel(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, "onnx", "model.onnx"))
+	_, err := os.Stat(findONNXModel(dir))
 	return err == nil
 }
 
@@ -209,7 +217,7 @@ func VerifyModel(modelPath string) error {
 }
 
 func verifyModelHash(modelPath string) error {
-	onnxPath := filepath.Join(modelPath, "onnx", "model.onnx")
+	onnxPath := findONNXModel(modelPath)
 	if expectedModelSHA256 == "" {
 		slog.Warn("model checksum verification skipped: no expected hash configured",
 			"path", onnxPath,
