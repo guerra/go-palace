@@ -1,6 +1,7 @@
 package palace_test
 
 import (
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/guerra/go-palace/pkg/embed"
+	"github.com/guerra/go-palace/pkg/extractor"
 	"github.com/guerra/go-palace/pkg/palace"
 )
 
@@ -22,11 +24,12 @@ func openTest(t *testing.T) *palace.Palace {
 	return p
 }
 
-func makeDrawer(wing, room, src string, chunk int, doc string) palace.Drawer {
+func makeDrawer(wing, hall, room, src string, chunk int, doc string) palace.Drawer {
 	return palace.Drawer{
 		ID:         palace.ComputeDrawerID(wing, room, src, chunk),
 		Document:   doc,
 		Wing:       wing,
+		Hall:       hall,
 		Room:       room,
 		SourceFile: src,
 		ChunkIndex: chunk,
@@ -60,9 +63,9 @@ func TestOpenNilEmbedder(t *testing.T) {
 func TestUpsertAndCount(t *testing.T) {
 	p := openTest(t)
 	drawers := []palace.Drawer{
-		makeDrawer("myproj", "docs", "a.md", 0, "alpha content"),
-		makeDrawer("myproj", "docs", "a.md", 1, "beta content"),
-		makeDrawer("other", "code", "b.go", 0, "gamma content"),
+		makeDrawer("myproj", "knowledge", "docs", "a.md", 0, "alpha content"),
+		makeDrawer("myproj", "knowledge", "docs", "a.md", 1, "beta content"),
+		makeDrawer("other", "knowledge", "code", "b.go", 0, "gamma content"),
 	}
 	if err := p.UpsertBatch(drawers); err != nil {
 		t.Fatalf("upsert batch: %v", err)
@@ -101,9 +104,9 @@ func TestCountWhereRejectsUnknownKey(t *testing.T) {
 func TestGetByWhere(t *testing.T) {
 	p := openTest(t)
 	in := []palace.Drawer{
-		makeDrawer("w", "r", "a.md", 0, "zero"),
-		makeDrawer("w", "r", "a.md", 1, "one"),
-		makeDrawer("w", "r", "b.md", 0, "other file"),
+		makeDrawer("w", "knowledge", "r", "a.md", 0, "zero"),
+		makeDrawer("w", "knowledge", "r", "a.md", 1, "one"),
+		makeDrawer("w", "knowledge", "r", "b.md", 0, "other file"),
 	}
 	if err := p.UpsertBatch(in); err != nil {
 		t.Fatalf("upsert: %v", err)
@@ -139,7 +142,7 @@ func TestGetWhereRejectsUnknownKey(t *testing.T) {
 
 func TestDelete(t *testing.T) {
 	p := openTest(t)
-	d := makeDrawer("w", "r", "a.md", 0, "content")
+	d := makeDrawer("w", "knowledge", "r", "a.md", 0, "content")
 	if err := p.Upsert(d); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
@@ -163,7 +166,7 @@ func TestQuerySemanticOrder(t *testing.T) {
 	docs := []string{"alpha", "beta", "gamma", "delta", "epsilon"}
 	var drawers []palace.Drawer
 	for i, doc := range docs {
-		drawers = append(drawers, makeDrawer("w", "r", "f.md", i, doc))
+		drawers = append(drawers, makeDrawer("w", "knowledge", "r", "f.md", i, doc))
 	}
 	if err := p.UpsertBatch(drawers); err != nil {
 		t.Fatalf("upsert: %v", err)
@@ -187,9 +190,9 @@ func TestQuerySemanticOrder(t *testing.T) {
 func TestQueryWingFilter(t *testing.T) {
 	p := openTest(t)
 	drawers := []palace.Drawer{
-		makeDrawer("A", "r1", "a.md", 0, "lorem"),
-		makeDrawer("A", "r1", "a.md", 1, "ipsum"),
-		makeDrawer("B", "r2", "b.md", 0, "dolor"),
+		makeDrawer("A", "knowledge", "r1", "a.md", 0, "lorem"),
+		makeDrawer("A", "knowledge", "r1", "a.md", 1, "ipsum"),
+		makeDrawer("B", "knowledge", "r2", "b.md", 0, "dolor"),
 	}
 	if err := p.UpsertBatch(drawers); err != nil {
 		t.Fatalf("upsert: %v", err)
@@ -234,8 +237,8 @@ func TestPersistenceAcrossClose(t *testing.T) {
 		t.Fatalf("open1: %v", err)
 	}
 	if err := p1.UpsertBatch([]palace.Drawer{
-		makeDrawer("w", "r", "a.md", 0, "one"),
-		makeDrawer("w", "r", "a.md", 1, "two"),
+		makeDrawer("w", "knowledge", "r", "a.md", 0, "one"),
+		makeDrawer("w", "knowledge", "r", "a.md", 1, "two"),
 	}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
@@ -288,7 +291,7 @@ func TestOpenSameDimensionSucceeds(t *testing.T) {
 
 func TestUpsertReplacesRow(t *testing.T) {
 	p := openTest(t)
-	d := makeDrawer("w", "r", "a.md", 0, "initial")
+	d := makeDrawer("w", "knowledge", "r", "a.md", 0, "initial")
 	if err := p.Upsert(d); err != nil {
 		t.Fatalf("upsert1: %v", err)
 	}
@@ -309,5 +312,374 @@ func TestUpsertReplacesRow(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Document != "updated" {
 		t.Errorf("replace failed: %+v", got)
+	}
+}
+
+func TestQueryHallFilter(t *testing.T) {
+	p := openTest(t)
+	drawers := []palace.Drawer{
+		makeDrawer("w", "conversations", "r", "a.md", 0, "alpha chat"),
+		makeDrawer("w", "conversations", "r", "a.md", 1, "beta chat"),
+		makeDrawer("w", "diary", "r", "b.md", 0, "diary entry"),
+	}
+	if err := p.UpsertBatch(drawers); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	res, err := p.Query("x", palace.QueryOptions{Hall: "conversations", NResults: 10})
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if len(res) == 0 {
+		t.Fatal("no results with hall filter")
+	}
+	for _, r := range res {
+		if r.Drawer.Hall != "conversations" {
+			t.Errorf("hall leak: %q", r.Drawer.Hall)
+		}
+	}
+}
+
+func TestGetByHallWhere(t *testing.T) {
+	p := openTest(t)
+	in := []palace.Drawer{
+		makeDrawer("w", "knowledge", "r", "a.md", 0, "zero"),
+		makeDrawer("w", "diary", "r", "b.md", 0, "one"),
+		makeDrawer("w", "diary", "r", "b.md", 1, "two"),
+	}
+	if err := p.UpsertBatch(in); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, err := p.Get(palace.GetOptions{
+		Where: map[string]string{"hall": "diary"},
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d, want 2", len(got))
+	}
+	for _, d := range got {
+		if d.Hall != "diary" {
+			t.Errorf("hall mismatch: %q", d.Hall)
+		}
+	}
+}
+
+func TestUpsertRoundtripsHall(t *testing.T) {
+	p := openTest(t)
+	d := makeDrawer("w", "tasks", "r", "a.md", 0, "plan X")
+	if err := p.Upsert(d); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, err := p.Get(palace.GetOptions{Where: map[string]string{"source_file": "a.md"}})
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(got))
+	}
+	if got[0].Hall != "tasks" {
+		t.Errorf("hall roundtrip: got %q want %q", got[0].Hall, "tasks")
+	}
+}
+
+func TestEntityUpsertRoundtrip(t *testing.T) {
+	p := openTest(t)
+	row := palace.EntityRow{
+		Name:            "Riley",
+		Type:            "person",
+		Canonical:       "Riley",
+		AliasesJSON:     `["Ri"]`,
+		FirstSeen:       time.Now().UTC(),
+		LastSeen:        time.Now().UTC(),
+		OccurrenceCount: 3,
+	}
+	if err := p.EntityUpsert(row); err != nil {
+		t.Fatalf("EntityUpsert: %v", err)
+	}
+	got, err := p.EntityList()
+	if err != nil {
+		t.Fatalf("EntityList: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(got))
+	}
+	if got[0].Name != "Riley" || got[0].Type != "person" || got[0].OccurrenceCount != 3 {
+		t.Errorf("round-trip mismatch: %+v", got[0])
+	}
+	if got[0].AliasesJSON != `["Ri"]` {
+		t.Errorf("AliasesJSON: got %q want %q", got[0].AliasesJSON, `["Ri"]`)
+	}
+}
+
+func TestEntityListEmpty(t *testing.T) {
+	p := openTest(t)
+	got, err := p.EntityList()
+	if err != nil {
+		t.Fatalf("EntityList: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected empty, got %+v", got)
+	}
+}
+
+func TestEntityDeleteExisting(t *testing.T) {
+	p := openTest(t)
+	row := palace.EntityRow{
+		Name: "Bob", Type: "person", FirstSeen: time.Now().UTC(), LastSeen: time.Now().UTC(),
+	}
+	if err := p.EntityUpsert(row); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if err := p.EntityDelete("Bob"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	got, _ := p.EntityList()
+	if len(got) != 0 {
+		t.Errorf("expected empty post-delete, got %+v", got)
+	}
+}
+
+func TestEntityDeleteUnknown(t *testing.T) {
+	p := openTest(t)
+	// Idempotent: deleting a missing row returns nil.
+	if err := p.EntityDelete("missing"); err != nil {
+		t.Errorf("Delete missing: got %v, want nil (idempotent)", err)
+	}
+}
+
+func TestEntityUpsertEmptyName(t *testing.T) {
+	p := openTest(t)
+	err := p.EntityUpsert(palace.EntityRow{Name: ""})
+	if !errors.Is(err, palace.ErrEntityNotFound) {
+		t.Errorf("empty-name Upsert: got %v, want ErrEntityNotFound", err)
+	}
+}
+
+func TestEntityCaseInsensitiveID(t *testing.T) {
+	p := openTest(t)
+	row := palace.EntityRow{
+		Name: "Docker", Type: "tool",
+		FirstSeen: time.Now().UTC(), LastSeen: time.Now().UTC(),
+	}
+	if err := p.EntityUpsert(row); err != nil {
+		t.Fatalf("Upsert 1: %v", err)
+	}
+	row.Name = "DOCKER"
+	row.Canonical = "docker"
+	if err := p.EntityUpsert(row); err != nil {
+		t.Fatalf("Upsert 2: %v", err)
+	}
+	// Same lowercase id means the second upsert replaced the first.
+	got, _ := p.EntityList()
+	if len(got) != 1 {
+		t.Errorf("case-insensitive id: expected 1 row, got %d", len(got))
+	}
+}
+
+// TestUpsertStoresRawEmbedsNormalized verifies the dual-state invariant:
+// the stored `drawers.document` column retains the raw caller-supplied
+// string while the embedder sees a normalized form. Under FakeEmbedder
+// (deterministic byte-hash), two documents that normalize to the same
+// string must yield a cosine similarity of 1.0 when queried, proving the
+// embedder received the identical normalized input.
+func TestUpsertStoresRawEmbedsNormalized(t *testing.T) {
+	p := openTest(t)
+	rawWhitespace := "  hello\n\n\nworld  "
+	preNormalized := "hello\n\nworld"
+
+	d1 := makeDrawer("w", "knowledge", "r", "raw.md", 0, rawWhitespace)
+	d2 := makeDrawer("w", "knowledge", "r", "norm.md", 0, preNormalized)
+	if err := p.UpsertBatch([]palace.Drawer{d1, d2}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	// Stored document for d1 must be the raw caller string, untouched.
+	got, err := p.Get(palace.GetOptions{
+		Where: map[string]string{"source_file": "raw.md"},
+	})
+	if err != nil {
+		t.Fatalf("get raw: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 raw row, got %d", len(got))
+	}
+	if got[0].Document != rawWhitespace {
+		t.Errorf("stored doc was modified: got %q want %q", got[0].Document, rawWhitespace)
+	}
+
+	// Query with the pre-normalized text. Both drawers should return with
+	// similarity 1.0 because both embedded the same Normalize() output.
+	res, err := p.Query(preNormalized, palace.QueryOptions{NResults: 5})
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if len(res) < 2 {
+		t.Fatalf("expected >=2 results, got %d", len(res))
+	}
+	for _, r := range res[:2] {
+		// FakeEmbedder is deterministic hash: identical normalized input
+		// must produce similarity exactly 1.0.
+		if r.Similarity < 0.999999 {
+			t.Errorf("expected similarity ~1.0 for both normalize-equivalent docs, "+
+				"got id=%s sim=%f", r.Drawer.ID, r.Similarity)
+		}
+	}
+}
+
+// classificationsFromMetadata round-trips the metadata payload back through
+// json into the typed slice the extractor produces. The on-disk storage is
+// JSON text, so after Get the value in Metadata["classifications"] is
+// []any of map[string]any — callers asserting typed access must re-decode.
+func classificationsFromMetadata(t *testing.T, m map[string]any) []extractor.Classification {
+	t.Helper()
+	raw, ok := m[extractor.MetadataKey]
+	if !ok {
+		return nil
+	}
+	buf, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal metadata[%q]: %v", extractor.MetadataKey, err)
+	}
+	var cs []extractor.Classification
+	if err := json.Unmarshal(buf, &cs); err != nil {
+		t.Fatalf("unmarshal classifications: %v", err)
+	}
+	return cs
+}
+
+func TestUpsertAutoClassify(t *testing.T) {
+	p := openTest(t)
+	d := makeDrawer("test", "knowledge", "test-room", "t.md", 0,
+		"We decided to go with Postgres because of JSONB. The reason is reliability.")
+	if err := p.Upsert(d); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, err := p.Get(palace.GetOptions{Where: map[string]string{"source_file": "t.md"}})
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d drawers, want 1", len(got))
+	}
+	cs := classificationsFromMetadata(t, got[0].Metadata)
+	if len(cs) == 0 {
+		t.Fatalf("no classifications in metadata: %+v", got[0].Metadata)
+	}
+	if cs[0].Type != extractor.TypeDecision {
+		t.Errorf("type = %q, want %q", cs[0].Type, extractor.TypeDecision)
+	}
+}
+
+func TestUpsertExtractOnUpsertDisabled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "p.db")
+	p, err := palace.OpenWithOptions(path,
+		embed.NewFakeEmbedder(palace.DefaultEmbeddingDim),
+		palace.PalaceOptions{ExtractOnUpsert: false})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	d := makeDrawer("test", "knowledge", "test-room", "t.md", 0,
+		"We decided to go with Postgres because of JSONB. The reason is reliability.")
+	if err := p.Upsert(d); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, err := p.Get(palace.GetOptions{Where: map[string]string{"source_file": "t.md"}})
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d drawers, want 1", len(got))
+	}
+	if _, has := got[0].Metadata[extractor.MetadataKey]; has {
+		t.Errorf("classifications unexpectedly present: %+v", got[0].Metadata)
+	}
+}
+
+func TestMetadataPreservedOnReupsert(t *testing.T) {
+	p := openTest(t)
+	doc := "We decided to go with Postgres because of JSONB. The reason is reliability."
+
+	d1 := makeDrawer("test", "knowledge", "test-room", "t.md", 0, doc)
+	d1.Metadata = map[string]any{"user_tag": "foo"}
+	if err := p.Upsert(d1); err != nil {
+		t.Fatalf("upsert 1: %v", err)
+	}
+
+	// Re-upsert (same ID): caller supplies preset user_tag again — we
+	// assert the auto-classify logic preserves it on THIS call.
+	d2 := makeDrawer("test", "knowledge", "test-room", "t.md", 0, doc)
+	d2.Metadata = map[string]any{"user_tag": "foo"}
+	if err := p.Upsert(d2); err != nil {
+		t.Fatalf("upsert 2: %v", err)
+	}
+
+	got, err := p.Get(palace.GetOptions{Where: map[string]string{"source_file": "t.md"}})
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d drawers, want 1", len(got))
+	}
+	if got[0].Metadata["user_tag"] != "foo" {
+		t.Errorf("user_tag = %v, want %q", got[0].Metadata["user_tag"], "foo")
+	}
+	cs := classificationsFromMetadata(t, got[0].Metadata)
+	if len(cs) == 0 {
+		t.Errorf("classifications missing after re-upsert: %+v", got[0].Metadata)
+	}
+}
+
+func TestQueryFilterByClassification(t *testing.T) {
+	p := openTest(t)
+	decisionDoc := "We decided to go with Postgres because of JSONB. The reason is reliability."
+	problemDoc := "The bug keeps crashing on CI. The root cause is unclear and the build is broken."
+	neutralDoc := "The weather is nice today, just ordinary prose with no markers present anywhere."
+
+	drawers := []palace.Drawer{
+		makeDrawer("w", "knowledge", "r", "dec1.md", 0, decisionDoc),
+		makeDrawer("w", "knowledge", "r", "dec2.md", 0, decisionDoc+" Also framework choice."),
+		makeDrawer("w", "knowledge", "r", "prob1.md", 0, problemDoc),
+		makeDrawer("w", "knowledge", "r", "prob2.md", 0, problemDoc+" Another error."),
+		makeDrawer("w", "knowledge", "r", "neutral.md", 0, neutralDoc),
+	}
+	if err := p.UpsertBatch(drawers); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	// Decision filter → 2 results.
+	res, err := p.Query("Postgres reliability", palace.QueryOptions{
+		Classification: extractor.TypeDecision,
+		NResults:       10,
+	})
+	if err != nil {
+		t.Fatalf("query decision: %v", err)
+	}
+	if len(res) != 2 {
+		t.Errorf("decision filter: got %d results, want 2", len(res))
+	}
+
+	// No filter → 5 results.
+	all, err := p.Query("Postgres reliability", palace.QueryOptions{NResults: 10})
+	if err != nil {
+		t.Fatalf("query all: %v", err)
+	}
+	if len(all) != 5 {
+		t.Errorf("no filter: got %d results, want 5", len(all))
+	}
+
+	// Milestone filter → 0 results.
+	mile, err := p.Query("Postgres reliability", palace.QueryOptions{
+		Classification: extractor.TypeMilestone,
+		NResults:       10,
+	})
+	if err != nil {
+		t.Fatalf("query milestone: %v", err)
+	}
+	if len(mile) != 0 {
+		t.Errorf("milestone filter: got %d results, want 0", len(mile))
 	}
 }

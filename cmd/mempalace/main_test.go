@@ -23,7 +23,7 @@ func TestStatusCommand(t *testing.T) {
 		t.Errorf("expected output to contain 'mempalace', got %q", out)
 	}
 	// Enhanced status prints version + palace info (or "not found" hint).
-	if !strings.Contains(out, "0.1.0") {
+	if !strings.Contains(out, "0.2.0") {
 		t.Errorf("expected output to contain version, got %q", out)
 	}
 }

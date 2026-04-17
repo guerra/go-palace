@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/guerra/go-palace/internal/graph"
+	"github.com/guerra/go-palace/pkg/halls"
 	"github.com/guerra/go-palace/pkg/kg"
 	"github.com/guerra/go-palace/pkg/palace"
 	"github.com/guerra/go-palace/pkg/searcher"
@@ -239,6 +240,10 @@ func toolAddDrawer(s *Server, args map[string]any) map[string]any {
 	if addedBy == "" {
 		addedBy = "mcp"
 	}
+	hallArg, _ := args["hall"].(string)
+	if !halls.IsValid(hallArg) {
+		hallArg = halls.HallConversations
+	}
 
 	wing = sanitizeWingRoom(wing)
 	room = sanitizeWingRoom(room)
@@ -282,6 +287,7 @@ func toolAddDrawer(s *Server, args map[string]any) map[string]any {
 		ID:         drawerID,
 		Document:   content,
 		Wing:       wing,
+		Hall:       hallArg,
 		Room:       room,
 		SourceFile: sourceFile,
 		ChunkIndex: 0,
@@ -489,11 +495,13 @@ func toolDiaryWrite(s *Server, args map[string]any) map[string]any {
 		ID:       entryID,
 		Document: entry,
 		Wing:     wing,
+		Hall:     halls.HallDiary,
 		Room:     room,
 		AddedBy:  agentName,
 		FiledAt:  now,
 		Metadata: map[string]any{
-			"hall":  "hall_diary",
+			// Keep legacy metadata key for internal/graph readers (gp-3 will migrate).
+			"hall":  halls.HallDiary,
 			"topic": topic,
 			"type":  "diary_entry",
 			"agent": agentName,
@@ -924,6 +932,7 @@ var toolDefs = map[string]map[string]any{
 			"content":     map[string]any{"type": "string", "description": "Verbatim content to store"},
 			"source_file": map[string]any{"type": "string", "description": "Where this came from (optional)"},
 			"added_by":    map[string]any{"type": "string", "description": "Who is filing this (default: mcp)"},
+			"hall":        map[string]any{"type": "string", "description": "Hall taxonomy (conversations|journal|diary|knowledge|tasks|scratch); default conversations"},
 		},
 		"required": []string{"wing", "room", "content"},
 	},

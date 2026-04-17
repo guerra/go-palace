@@ -8,8 +8,10 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -19,6 +21,8 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/guerra/go-palace/pkg/embed"
+	"github.com/guerra/go-palace/pkg/extractor"
+	"github.com/guerra/go-palace/pkg/normalize"
 )
 
 // Sentinel errors returned by the palace API.
@@ -42,10 +46,31 @@ const DefaultEmbeddingDim = 384
 // the dimension stored in an existing palace.
 var ErrDimensionMismatch = errors.New("palace: dimension mismatch")
 
+// ErrSchemaOutdated indicates the palace schema is older than this binary
+// expects and the migration attempt failed.
+var ErrSchemaOutdated = errors.New("palace: schema outdated; migration failed")
+
+// ErrDedupCrossPartition is returned by MergeAndDelete when the winner and
+// any loser drawer do not share the same (wing, hall, source_file)
+// partition. Dedup MUST NOT cross partition boundaries — this sentinel
+// surfaces misuse rather than silently corrupting partition semantics.
+var ErrDedupCrossPartition = errors.New("palace: dedup partition mismatch")
+
+// ErrEntityNotFound is returned by entity-table operations when the target
+// row does not exist OR when the caller supplies an empty Name.
+var ErrEntityNotFound = errors.New("palace: entity not found")
+
+// ErrInvalidOptions is returned by OpenWithOptions when the caller supplies
+// a self-inconsistent PalaceOptions — e.g. AutoExtractKG=true without KG,
+// EntityRegistry, or AutoExtractFn wired. Fail-fast so silent no-op
+// extraction does not slip past a first integration.
+var ErrInvalidOptions = errors.New("palace: invalid options")
+
 // allowedWhereKeys is the allowlist of columns Get may filter on.
 // Used to prevent SQL injection via dynamic column names.
 var allowedWhereKeys = map[string]string{
 	"wing":        "wing",
+	"hall":        "hall",
 	"room":        "room",
 	"source_file": "source_file",
 	"added_by":    "added_by",
@@ -58,14 +83,102 @@ type Palace struct {
 	embedder embed.Embedder
 	path     string
 	dim      int
+	opts     PalaceOptions
+}
+
+// PalaceOptions configures palace behavior at Open time. Zero-value defaults
+// are tuned for typical prose-heavy workflows.
+type PalaceOptions struct {
+	// ExtractOnUpsert, when true, auto-classifies every Upsert into
+	// drawer metadata under extractor.MetadataKey. Defaults to true via
+	// DefaultPalaceOptions. Disable for bulk-load flows ingesting
+	// non-prose content.
+	ExtractOnUpsert bool
+
+	// AutoExtractKG, when true, invokes AutoExtractFn after every
+	// successful UpsertBatch commit to emit triples into KG. Requires KG,
+	// EntityRegistry, and AutoExtractFn to be non-nil — any nil disables
+	// extraction for that Upsert. Defaults to false. KG write failures
+	// are logged but do NOT fail the Upsert (palace is the source of
+	// truth; KG is opportunistic).
+	AutoExtractKG bool
+
+	// KG is the triple sink to receive auto-extracted triples. Typically
+	// set to kg.NewPalaceAdapter(k). Unused unless AutoExtractKG is true.
+	KG TripleSink
+
+	// EntityRegistry detects entities in drawer content to anchor triple
+	// extraction. Typically an in-process wrapper over pkg/entity.Detect.
+	// Palace accepts an INTERFACE (not a concrete *entity.Registry) so
+	// pkg/palace does NOT import pkg/entity. Unused unless AutoExtractKG
+	// is true.
+	EntityRegistry EntityDetector
+
+	// AutoExtractFn pulls triples out of a drawer given its detected
+	// entities. Typically set to kg.AutoExtractTriples. Unused unless
+	// AutoExtractKG is true. Caller-supplied so pkg/palace imports
+	// nothing from pkg/kg (cycle-break).
+	AutoExtractFn func(Drawer, []EntityMatch) []TripleRow
+
+	// TrackLastAccessed, when true, causes Query to UPDATE
+	// metadata_json.$.last_accessed on every returned drawer id in a
+	// single transaction. Defaults to false — turning it on by default
+	// would silently mutate state on every existing Query call across
+	// unchanged callers. Enable when using Compact with last-access
+	// cold detection; otherwise Compact falls back to filed_at.
+	TrackLastAccessed bool
+}
+
+// DefaultPalaceOptions returns the default options used by Open.
+func DefaultPalaceOptions() PalaceOptions {
+	return PalaceOptions{ExtractOnUpsert: true}
+}
+
+// TripleSink is the write side of a knowledge graph exposed to palace.
+// Implemented by kg.NewPalaceAdapter(k). Defining the contract here keeps
+// pkg/palace from importing pkg/kg — the sole cycle-break between the two.
+type TripleSink interface {
+	AddTriple(row TripleRow) (string, error)
+}
+
+// TripleRow is the palace-local shape of a knowledge graph triple. Fields
+// mirror kg.Triple; the adapter in pkg/kg converts row → kg.Triple.
+type TripleRow struct {
+	Subject      string
+	Predicate    string
+	Object       string
+	ValidFrom    string
+	Confidence   float64
+	SourceCloset string
+}
+
+// EntityDetector runs entity detection on a content string. Implemented by
+// caller-supplied wrappers over pkg/entity (kg.NewStatelessEntityDetector).
+// The interface lives here so pkg/palace does not import pkg/entity.
+type EntityDetector interface {
+	DetectEntities(content string) []EntityMatch
+}
+
+// EntityMatch mirrors the subset of pkg/entity.Entity fields needed for
+// triple extraction. Offset is a BYTE offset such that
+// content[Offset:Offset+len(Name)] == Name.
+type EntityMatch struct {
+	Name       string
+	Type       string
+	Canonical  string
+	Confidence float64
+	Offset     int
 }
 
 // Drawer is one stored memory cell. ID is deterministic via ComputeDrawerID.
 // Metadata carries any extra key-value pairs that do not fit the typed fields.
+// Hall is the 4th-tier taxonomy bucket (see pkg/halls). Empty string is
+// legal (legacy rows), but new code should set it via halls.Detect.
 type Drawer struct {
 	ID          string
 	Document    string
 	Wing        string
+	Hall        string
 	Room        string
 	SourceFile  string
 	ChunkIndex  int
@@ -92,29 +205,55 @@ type GetOptions struct {
 	Offset int
 }
 
-// QueryOptions controls a semantic Query call. Wing and Room restrict
+// QueryOptions controls a semantic Query call. Wing, Hall and Room restrict
 // results; empty strings mean "no filter". NResults <= 0 defaults to 5.
+// Classification, when non-empty, restricts results to drawers whose
+// metadata_json "classifications" array contains at least one entry with
+// matching type.
 type QueryOptions struct {
-	Wing     string
-	Room     string
-	NResults int
+	Wing           string
+	Hall           string
+	Room           string
+	Classification extractor.ClassificationType
+	NResults       int
 }
 
 func init() { vec.Auto() }
 
 // Open opens (or creates) the sqlite-vec database at path, applies the
-// schema, and returns a ready-to-use Palace. The embedder is stored for
-// later Upsert / Query calls. The embedder's dimension is validated
-// against any previously stored dimension — a mismatch is rejected at
-// Open so callers don't discover it via a cryptic sqlite-vec BLOB-length
-// error on first insert.
+// schema, and returns a ready-to-use Palace with DefaultPalaceOptions
+// (ExtractOnUpsert=true). The embedder is stored for later Upsert / Query
+// calls. The embedder's dimension is validated against any previously
+// stored dimension — a mismatch is rejected at Open so callers don't
+// discover it via a cryptic sqlite-vec BLOB-length error on first insert.
 func Open(path string, e embed.Embedder) (*Palace, error) {
+	return OpenWithOptions(path, e, DefaultPalaceOptions())
+}
+
+// OpenWithOptions is Open with caller-supplied PalaceOptions. Use this to
+// disable ExtractOnUpsert for bulk-load workflows that do not want
+// per-drawer classification overhead.
+func OpenWithOptions(path string, e embed.Embedder, opts PalaceOptions) (*Palace, error) {
 	if e == nil {
 		return nil, fmt.Errorf("%w: nil embedder", ErrEmbedder)
 	}
 	embDim := e.Dimension()
 	if embDim <= 0 {
 		return nil, fmt.Errorf("%w: embedder dim %d invalid", ErrEmbedder, embDim)
+	}
+	// AutoExtractKG is a cross-field contract: enabling it without any of
+	// KG / EntityRegistry / AutoExtractFn would silently no-op extraction
+	// on every UpsertBatch. Fail fast at Open so misconfig surfaces before
+	// writes accumulate.
+	if opts.AutoExtractKG {
+		switch {
+		case opts.KG == nil:
+			return nil, fmt.Errorf("%w: AutoExtractKG=true requires KG sink", ErrInvalidOptions)
+		case opts.EntityRegistry == nil:
+			return nil, fmt.Errorf("%w: AutoExtractKG=true requires EntityRegistry", ErrInvalidOptions)
+		case opts.AutoExtractFn == nil:
+			return nil, fmt.Errorf("%w: AutoExtractKG=true requires AutoExtractFn", ErrInvalidOptions)
+		}
 	}
 	db, err := sql.Open("sqlite3", path)
 	if err != nil {
@@ -129,7 +268,7 @@ func Open(path string, e embed.Embedder) (*Palace, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("palace: enable WAL: %w", err)
 	}
-	if err := migrate(db, embDim); err != nil {
+	if err := migrate(db, embDim, path, e); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -151,7 +290,7 @@ func Open(path string, e embed.Embedder) (*Palace, error) {
 			return nil, fmt.Errorf("palace: write dim: %w", err)
 		}
 	}
-	return &Palace{db: db, embedder: e, path: path, dim: embDim}, nil
+	return &Palace{db: db, embedder: e, path: path, dim: embDim, opts: opts}, nil
 }
 
 // Close releases the underlying database. It is safe to call multiple times.
@@ -170,19 +309,52 @@ func (p *Palace) Upsert(d Drawer) error {
 	return p.UpsertBatch([]Drawer{d})
 }
 
-// UpsertBatch inserts or replaces many drawers atomically.
+// UpsertBatch inserts or replaces many drawers atomically. When
+// PalaceOptions.ExtractOnUpsert is true (the default), this mutates each
+// Drawer.Metadata in place to add a "classifications" entry keyed on
+// extractor.MetadataKey — callers sensitive to in-place mutation should
+// pass deep copies. Mutation is deferred until AFTER the embedder call
+// succeeds: if Embed fails, the caller's Drawer.Metadata is untouched.
 func (p *Palace) UpsertBatch(ds []Drawer) error {
 	if len(ds) == 0 {
 		return nil
 	}
-	// Embed all documents in one call for efficiency.
+	// Classify upfront (reading raw ds[i].Document — markers depend on
+	// original casing and punctuation that Normalize may alter) but hold
+	// results in a local slice. They are merged into Drawer.Metadata ONLY
+	// after Embed returns successfully, so embedder errors leave caller
+	// state untouched.
+	var classifications [][]extractor.Classification
+	if p.opts.ExtractOnUpsert {
+		classifications = make([][]extractor.Classification, len(ds))
+		for i := range ds {
+			classifications[i] = extractor.Extract(ds[i].Document)
+		}
+	}
+	// Embed all documents in one call for efficiency. Documents are
+	// normalized before embedding so incidental whitespace / CRLF / Unicode
+	// form differences do not fragment the vector space. The raw
+	// caller-supplied string is what upsertOne stores — dual-state: stored
+	// raw, embedded normalized. See pkg/normalize.
 	docs := make([]string, len(ds))
 	for i, d := range ds {
-		docs[i] = d.Document
+		docs[i] = normalize.Normalize(d.Document)
 	}
 	vecs, err := p.embedder.Embed(docs)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrEmbedder, err)
+	}
+	// Embed succeeded — safe to merge classifications into caller Metadata.
+	if p.opts.ExtractOnUpsert {
+		for i := range ds {
+			if len(classifications[i]) == 0 {
+				continue
+			}
+			if ds[i].Metadata == nil {
+				ds[i].Metadata = make(map[string]any, 1)
+			}
+			ds[i].Metadata[extractor.MetadataKey] = classifications[i]
+		}
 	}
 	if len(vecs) != len(ds) {
 		return fmt.Errorf("%w: embedder returned %d vecs for %d docs",
@@ -210,6 +382,28 @@ func (p *Palace) UpsertBatch(ds []Drawer) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("palace: commit: %w", err)
 	}
+
+	// KG auto-extract runs AFTER successful commit so a KG failure cannot
+	// roll back the palace write (palace is source of truth; KG is
+	// opportunistic). Each triple add failure is logged and skipped.
+	if p.opts.AutoExtractKG &&
+		p.opts.KG != nil &&
+		p.opts.EntityRegistry != nil &&
+		p.opts.AutoExtractFn != nil {
+		for _, d := range ds {
+			ents := p.opts.EntityRegistry.DetectEntities(d.Document)
+			if len(ents) == 0 {
+				continue
+			}
+			rows := p.opts.AutoExtractFn(d, ents)
+			for _, r := range rows {
+				if _, err := p.opts.KG.AddTriple(r); err != nil {
+					slog.Warn("palace: kg auto-extract add_triple",
+						"drawer_id", d.ID, "err", err)
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -229,7 +423,7 @@ func (p *Palace) Get(opts GetOptions) ([]Drawer, error) {
 		args = append(args, v)
 	}
 
-	query := `SELECT id, document, wing, room, source_file, chunk_index,
+	query := `SELECT id, document, wing, hall, room, source_file, chunk_index,
                 added_by, filed_at, source_mtime, metadata_json
               FROM drawers`
 	if len(clauses) > 0 {
@@ -278,7 +472,7 @@ func (p *Palace) GetByIDs(ids []string) ([]Drawer, error) {
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	query := `SELECT id, document, wing, room, source_file, chunk_index,
+	query := `SELECT id, document, wing, hall, room, source_file, chunk_index,
                 added_by, filed_at, source_mtime, metadata_json
               FROM drawers WHERE id IN (` + strings.Join(placeholders, ",") + `)
               ORDER BY wing, room, source_file, chunk_index`
@@ -327,6 +521,151 @@ func (p *Palace) Delete(id string) error {
 	return nil
 }
 
+// MergeAndDelete atomically merges mergedMeta into the winner drawer's
+// metadata_json and deletes the loserIDs. All loser IDs must share the
+// same (wing, hall, source_file) partition as the winner; any mismatch
+// rolls back and returns ErrDedupCrossPartition.
+//
+// The metadata merge is SHALLOW: keys in mergedMeta overwrite keys in the
+// winner's existing metadata. Callers that need deep-merge semantics must
+// compute the union themselves before calling.
+//
+// A nil / empty loserIDs is a no-op that still applies mergedMeta to the
+// winner's metadata (pass nil mergedMeta for a pure no-op).
+// winnerID == "" returns ErrNotFound; a winnerID that does not exist
+// returns ErrNotFound. Missing loser rows are ignored (warn only).
+func (p *Palace) MergeAndDelete(winnerID string, loserIDs []string, mergedMeta map[string]any) error {
+	if winnerID == "" {
+		return ErrNotFound
+	}
+	tx, err := p.db.Begin()
+	if err != nil {
+		return fmt.Errorf("palace: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var (
+		wWing, wHall, wSrc, wMetaJSON string
+	)
+	row := tx.QueryRow(
+		`SELECT wing, hall, source_file, metadata_json FROM drawers WHERE id = ?`,
+		winnerID,
+	)
+	if err := row.Scan(&wWing, &wHall, &wSrc, &wMetaJSON); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("palace: merge fetch winner: %w", err)
+	}
+
+	// Partition guard: every loser must match winner's (wing, hall, source_file).
+	// Batch the fetch into one IN (...) round-trip — small-group dedup is the
+	// common case but large groups should not pay per-row query overhead.
+	candidateIDs := make([]string, 0, len(loserIDs))
+	seen := map[string]bool{winnerID: true} // dedupe input + skip winner
+	for _, lid := range loserIDs {
+		if lid == "" || seen[lid] {
+			continue
+		}
+		seen[lid] = true
+		candidateIDs = append(candidateIDs, lid)
+	}
+
+	validLosers := make([]string, 0, len(candidateIDs))
+	if len(candidateIDs) > 0 {
+		placeholders := make([]string, len(candidateIDs))
+		args := make([]any, len(candidateIDs))
+		for i, id := range candidateIDs {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		rows, err := tx.Query(
+			`SELECT id, wing, hall, source_file FROM drawers WHERE id IN (`+
+				strings.Join(placeholders, ",")+`)`, args...,
+		)
+		if err != nil {
+			return fmt.Errorf("palace: merge fetch losers: %w", err)
+		}
+		loserInfo := make(map[string][3]string, len(candidateIDs))
+		for rows.Next() {
+			var lid, lWing, lHall, lSrc string
+			if err := rows.Scan(&lid, &lWing, &lHall, &lSrc); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("palace: merge scan loser: %w", err)
+			}
+			loserInfo[lid] = [3]string{lWing, lHall, lSrc}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("palace: merge loser rows: %w", err)
+		}
+		_ = rows.Close()
+
+		for _, lid := range candidateIDs {
+			info, ok := loserInfo[lid]
+			if !ok {
+				// Missing loser — skip silently. Dedup may race with other
+				// writers; an absent loser is simply already-gone.
+				continue
+			}
+			if info[0] != wWing || info[1] != wHall || info[2] != wSrc {
+				return fmt.Errorf("%w: winner=(%s,%s,%s) loser %s=(%s,%s,%s)",
+					ErrDedupCrossPartition, wWing, wHall, wSrc, lid, info[0], info[1], info[2])
+			}
+			validLosers = append(validLosers, lid)
+		}
+	}
+
+	// Shallow merge mergedMeta over winner metadata.
+	if len(mergedMeta) > 0 {
+		winnerMeta := map[string]any{}
+		if wMetaJSON != "" {
+			if err := json.Unmarshal([]byte(wMetaJSON), &winnerMeta); err != nil {
+				return fmt.Errorf("palace: parse winner metadata: %w", err)
+			}
+		}
+		for k, v := range mergedMeta {
+			winnerMeta[k] = v
+		}
+		newMeta, err := json.Marshal(winnerMeta)
+		if err != nil {
+			return fmt.Errorf("palace: marshal merged metadata: %w", err)
+		}
+		if _, err := tx.Exec(
+			`UPDATE drawers SET metadata_json = ? WHERE id = ?`,
+			string(newMeta), winnerID,
+		); err != nil {
+			return fmt.Errorf("palace: update winner metadata: %w", err)
+		}
+	}
+
+	// Batch delete losers from both tables.
+	if len(validLosers) > 0 {
+		placeholders := make([]string, len(validLosers))
+		args := make([]any, len(validLosers))
+		for i, id := range validLosers {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		in := strings.Join(placeholders, ",")
+		if _, err := tx.Exec(
+			`DELETE FROM drawers WHERE id IN (`+in+`)`, args...,
+		); err != nil {
+			return fmt.Errorf("palace: delete losers drawers: %w", err)
+		}
+		if _, err := tx.Exec(
+			`DELETE FROM drawers_vec WHERE id IN (`+in+`)`, args...,
+		); err != nil {
+			return fmt.Errorf("palace: delete losers vec: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("palace: commit merge: %w", err)
+	}
+	return nil
+}
+
 // Count returns the total number of drawers. A DB error is returned
 // explicitly so callers can distinguish "empty palace" (n=0, err=nil) from
 // "broken palace" (n=0, err != nil).
@@ -371,4 +710,111 @@ func (p *Palace) CountWhere(where map[string]string) (int, error) {
 func ComputeDrawerID(wing, room, sourceFile string, chunkIndex int) string {
 	sum := sha256.Sum256([]byte(sourceFile + strconv.Itoa(chunkIndex)))
 	return fmt.Sprintf("drawer_%s_%s_%s", wing, room, hex.EncodeToString(sum[:])[:24])
+}
+
+// EntityRow is the persisted shape of a pkg/entity.Registry entry. Kept
+// here (not in pkg/entity) so palace remains the single sqlite-aware
+// package; pkg/entity.PalaceStore converts between the two struct shapes.
+// AliasesJSON is a JSON-encoded []string; palace treats it as opaque text.
+type EntityRow struct {
+	Name            string    `json:"name"`
+	Type            string    `json:"type"`
+	Canonical       string    `json:"canonical"`
+	AliasesJSON     string    `json:"aliases_json"`
+	FirstSeen       time.Time `json:"first_seen"`
+	LastSeen        time.Time `json:"last_seen"`
+	OccurrenceCount int       `json:"occurrence_count"`
+}
+
+// EntityUpsert inserts or replaces a row in the entities table. The row's
+// lowercase Name is used as the primary key so Lookups stay
+// case-insensitive. An empty Name returns ErrEntityNotFound.
+func (p *Palace) EntityUpsert(row EntityRow) error {
+	if row.Name == "" {
+		return fmt.Errorf("%w: empty name", ErrEntityNotFound)
+	}
+	id := strings.ToLower(row.Name)
+	aliases := row.AliasesJSON
+	if aliases == "" {
+		aliases = "[]"
+	}
+	tx, err := p.db.Begin()
+	if err != nil {
+		return fmt.Errorf("palace: entity upsert begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.Exec(
+		`INSERT OR REPLACE INTO entities
+         (id, name, type, canonical, aliases_json, first_seen, last_seen, occurrence_count)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, row.Name, row.Type, row.Canonical, aliases,
+		row.FirstSeen.UTC().Format(time.RFC3339Nano),
+		row.LastSeen.UTC().Format(time.RFC3339Nano),
+		row.OccurrenceCount,
+	)
+	if err != nil {
+		return fmt.Errorf("palace: entity upsert exec: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("palace: entity upsert commit: %w", err)
+	}
+	return nil
+}
+
+// EntityList returns every row in the entities table, ordered by name.
+func (p *Palace) EntityList() ([]EntityRow, error) {
+	rows, err := p.db.Query(
+		`SELECT name, type, canonical, aliases_json, first_seen, last_seen, occurrence_count
+         FROM entities ORDER BY name`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("palace: entity list query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []EntityRow
+	for rows.Next() {
+		var (
+			row                 EntityRow
+			firstSeen, lastSeen string
+		)
+		if err := rows.Scan(
+			&row.Name, &row.Type, &row.Canonical, &row.AliasesJSON,
+			&firstSeen, &lastSeen, &row.OccurrenceCount,
+		); err != nil {
+			return nil, fmt.Errorf("palace: entity list scan: %w", err)
+		}
+		if firstSeen != "" {
+			t, err := time.Parse(time.RFC3339Nano, firstSeen)
+			if err != nil {
+				return nil, fmt.Errorf("palace: entity list first_seen parse: %w", err)
+			}
+			row.FirstSeen = t
+		}
+		if lastSeen != "" {
+			t, err := time.Parse(time.RFC3339Nano, lastSeen)
+			if err != nil {
+				return nil, fmt.Errorf("palace: entity list last_seen parse: %w", err)
+			}
+			row.LastSeen = t
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("palace: entity list rows: %w", err)
+	}
+	return out, nil
+}
+
+// EntityDelete removes the row whose lowercase Name matches. Idempotent:
+// deleting a missing row returns nil (mirrors MemoryStore semantics).
+func (p *Palace) EntityDelete(name string) error {
+	if name == "" {
+		return fmt.Errorf("%w: empty name", ErrEntityNotFound)
+	}
+	id := strings.ToLower(name)
+	if _, err := p.db.Exec(`DELETE FROM entities WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("palace: entity delete: %w", err)
+	}
+	return nil
 }
