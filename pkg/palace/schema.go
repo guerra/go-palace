@@ -53,12 +53,30 @@ func schemaStatements(dim int) []string {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
     )`,
+		// v3: entities table — backs pkg/entity.PalaceStore. id is the
+		// lowercase Name so Lookups stay case-insensitive. aliases_json is
+		// opaque text (JSON-encoded []string) — palace does not introspect.
+		`CREATE TABLE IF NOT EXISTS entities (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL,
+        canonical TEXT NOT NULL DEFAULT '',
+        aliases_json TEXT NOT NULL DEFAULT '[]',
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        occurrence_count INTEGER NOT NULL DEFAULT 0
+    )`,
+		`CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type)`,
 	}
 }
 
 // schemaVersionCurrent is the schema_version written by this binary on every
 // successful Open() against either a fresh or freshly-migrated palace.
-const schemaVersionCurrent = 2
+//
+// v3: adds entities table (additive-only — no ALTER, no vec rebuild). v2
+// palaces stamp to v3 on next Open() with zero destructive changes; the
+// IF NOT EXISTS guards in schemaStatements do the work.
+const schemaVersionCurrent = 3
 
 // readStoredDim reads the embedding dimension from the palace_meta table.
 // Returns (dim, true, nil) if found, (0, false, nil) if the table or key

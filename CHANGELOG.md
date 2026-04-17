@@ -18,6 +18,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pkg/dedup` package: cosine-similarity duplicate detection with hall-aware `(wing, hall, source_file)` partition, optional metadata merge, dry-run mode. Exposes `Run(p, opts)`, `DedupOptions`, `DedupReport`, `DuplicateGroup`, `ErrInvalidThreshold`.
 - `palace.Palace.MergeAndDelete(winnerID, loserIDs, mergedMeta)` atomic primitive for dedup engines. Enforces the `(wing, hall, source_file)` partition guard inside a single transaction.
 - `palace.ErrDedupCrossPartition` sentinel error.
+- `pkg/entity` package: per-content typed entity detection (`person`, `place`,
+  `project`, `tool`, `date`, `url`, `email`, `uncertain`) with byte offsets,
+  plus a pluggable `Registry` (Add / Lookup / Merge / List / ListByType)
+  backed by either an in-memory store (default) or a palace-backed sqlite
+  store. Ports the Python `entity_detector.py` person + project regex
+  patterns verbatim and extends with Go-authored patterns for the remaining
+  types. Pure Go, no ML, no network.
+- `palace.EntityRow` struct + `palace.Palace.EntityUpsert`,
+  `palace.Palace.EntityList`, `palace.Palace.EntityDelete` narrow primitives
+  backing `pkg/entity.PalaceStore`.
+- `palace.ErrEntityNotFound` sentinel error.
+- `entities` table added to the palace schema. `schema_version` bumped
+  from 2 to 3. v2 palaces auto-migrate additively on next `palace.Open()`
+  (no vec rebuild, no data transform, no backup).
 
 ### Changed
 - `drawers` table: new `hall TEXT NOT NULL DEFAULT ''` column.

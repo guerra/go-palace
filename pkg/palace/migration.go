@@ -25,13 +25,20 @@ import (
 //     partition)? This distinguishes "fresh palace" (tables don't exist yet)
 //     from "legacy empty palace" (v0.1 tables exist with 0 rows). A legacy
 //     empty palace MUST rebuild the vec table even though `COUNT(*)` is 0.
-//  2. Run idempotent schemaStatements (fresh DB → v0.2 shape; legacy → no-op).
+//  2. Run idempotent schemaStatements (fresh DB → vN shape; legacy → no-op).
 //  3. If schema_version already >= current, return (fast path).
 //  4. Fail-fast on dim mismatch BEFORE any re-embed work.
-//  5. If the pre-DDL probe said "no legacy vec table", this is a fresh palace —
-//     stamp schema_version and return.
-//  6. Otherwise: legacy palace (empty or populated) → migrateToV2 (backup +
+//  5. If the pre-DDL probe said "no legacy vec table", this is a fresh palace
+//     OR a v2+ palace. Either way schemaStatements already produced the
+//     current shape — stamp schema_version and return. The v2→v3 bump is
+//     additive-only (entities table + index) so no special migration is
+//     needed; the IF NOT EXISTS statements in schemaStatements(…) take
+//     care of adding the table to existing v2 palaces on next Open.
+//  6. Otherwise: legacy v1 palace (empty or populated) → migrateToV2 (backup +
 //     ALTER + rebuild vec + re-embed). reembedAll is a no-op for zero rows.
+//     After migrateToV2 completes, writeSchemaVersion stamps schemaVersionCurrent
+//     (currently v3 — v1 palaces skip straight to v3 because schemaStatements
+//     already added the entities table during step 2).
 //  7. Write schema_version.
 func migrate(db *sql.DB, dim int, palacePath string, embedder embed.Embedder) error {
 	// Step 1: probe BEFORE DDL so we can tell fresh from legacy-empty.

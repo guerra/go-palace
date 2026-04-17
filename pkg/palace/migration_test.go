@@ -204,6 +204,82 @@ func TestMigrationFromV1(t *testing.T) {
 	if _, err := os.Stat(path + ".pre-v0.2.bak"); err != nil {
 		t.Errorf("backup file missing: %v", err)
 	}
+
+	// (e) entities table exists (v3 additive migration path) — EntityList
+	// must succeed without error even on a freshly-migrated v1 palace.
+	if _, err := p.EntityList(); err != nil {
+		t.Errorf("v3 entities table missing post-migration: %v", err)
+	}
+}
+
+// TestMigrationV2ToV3Additive exercises the v2→v3 additive path: a palace
+// that already has the v2 schema (drawers + drawers_vec with hall partition)
+// but no entities table must gain the table on the next Open() without any
+// destructive work (no backup, no vec rebuild).
+func TestMigrationV2ToV3Additive(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "p.db")
+
+	// Step 1: open with the current binary to produce a v3 palace, add a
+	// drawer, then manually rewind schema_version to 2 and DROP the
+	// entities table. This simulates a v2 palace persisted before v3.
+	p1, err := palace.Open(path, embed.NewFakeEmbedder(palace.DefaultEmbeddingDim))
+	if err != nil {
+		t.Fatalf("open 1: %v", err)
+	}
+	if err := p1.Upsert(palace.Drawer{
+		ID:         palace.ComputeDrawerID("w", "r", "a.md", 0),
+		Document:   "hello",
+		Wing:       "w",
+		Hall:       "knowledge",
+		Room:       "r",
+		SourceFile: "a.md",
+		ChunkIndex: 0,
+		AddedBy:    "test",
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	_ = p1.Close()
+
+	// Forcibly regress the schema to v2 shape.
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if _, err := db.Exec(`DROP TABLE IF EXISTS entities`); err != nil {
+		t.Fatalf("drop entities: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT OR REPLACE INTO palace_meta (key, value) VALUES ('schema_version', '2')`,
+	); err != nil {
+		t.Fatalf("rewind schema_version: %v", err)
+	}
+	_ = db.Close()
+
+	// Step 2: re-open with the current binary — v2 → v3 additive migration.
+	p2, err := palace.Open(path, embed.NewFakeEmbedder(palace.DefaultEmbeddingDim))
+	if err != nil {
+		t.Fatalf("open 2 (v2→v3): %v", err)
+	}
+	t.Cleanup(func() { _ = p2.Close() })
+
+	// (a) entities table exists again.
+	if _, err := p2.EntityList(); err != nil {
+		t.Errorf("entities table missing after v2→v3: %v", err)
+	}
+
+	// (b) pre-existing drawer survived.
+	n, err := p2.Count()
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("drawer count after v2→v3: got %d want 1", n)
+	}
+
+	// (c) no backup file was created (additive path must not touch it).
+	if _, err := os.Stat(path + ".pre-v0.2.bak"); err == nil {
+		t.Error("v2→v3 additive path created a backup — should not have")
+	}
 }
 
 func TestMigrationIsIdempotent(t *testing.T) {

@@ -382,6 +382,100 @@ func TestUpsertRoundtripsHall(t *testing.T) {
 	}
 }
 
+func TestEntityUpsertRoundtrip(t *testing.T) {
+	p := openTest(t)
+	row := palace.EntityRow{
+		Name:            "Riley",
+		Type:            "person",
+		Canonical:       "Riley",
+		AliasesJSON:     `["Ri"]`,
+		FirstSeen:       time.Now().UTC(),
+		LastSeen:        time.Now().UTC(),
+		OccurrenceCount: 3,
+	}
+	if err := p.EntityUpsert(row); err != nil {
+		t.Fatalf("EntityUpsert: %v", err)
+	}
+	got, err := p.EntityList()
+	if err != nil {
+		t.Fatalf("EntityList: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(got))
+	}
+	if got[0].Name != "Riley" || got[0].Type != "person" || got[0].OccurrenceCount != 3 {
+		t.Errorf("round-trip mismatch: %+v", got[0])
+	}
+	if got[0].AliasesJSON != `["Ri"]` {
+		t.Errorf("AliasesJSON: got %q want %q", got[0].AliasesJSON, `["Ri"]`)
+	}
+}
+
+func TestEntityListEmpty(t *testing.T) {
+	p := openTest(t)
+	got, err := p.EntityList()
+	if err != nil {
+		t.Fatalf("EntityList: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected empty, got %+v", got)
+	}
+}
+
+func TestEntityDeleteExisting(t *testing.T) {
+	p := openTest(t)
+	row := palace.EntityRow{
+		Name: "Bob", Type: "person", FirstSeen: time.Now().UTC(), LastSeen: time.Now().UTC(),
+	}
+	if err := p.EntityUpsert(row); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if err := p.EntityDelete("Bob"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	got, _ := p.EntityList()
+	if len(got) != 0 {
+		t.Errorf("expected empty post-delete, got %+v", got)
+	}
+}
+
+func TestEntityDeleteUnknown(t *testing.T) {
+	p := openTest(t)
+	// Idempotent: deleting a missing row returns nil.
+	if err := p.EntityDelete("missing"); err != nil {
+		t.Errorf("Delete missing: got %v, want nil (idempotent)", err)
+	}
+}
+
+func TestEntityUpsertEmptyName(t *testing.T) {
+	p := openTest(t)
+	err := p.EntityUpsert(palace.EntityRow{Name: ""})
+	if !errors.Is(err, palace.ErrEntityNotFound) {
+		t.Errorf("empty-name Upsert: got %v, want ErrEntityNotFound", err)
+	}
+}
+
+func TestEntityCaseInsensitiveID(t *testing.T) {
+	p := openTest(t)
+	row := palace.EntityRow{
+		Name: "Docker", Type: "tool",
+		FirstSeen: time.Now().UTC(), LastSeen: time.Now().UTC(),
+	}
+	if err := p.EntityUpsert(row); err != nil {
+		t.Fatalf("Upsert 1: %v", err)
+	}
+	row.Name = "DOCKER"
+	row.Canonical = "docker"
+	if err := p.EntityUpsert(row); err != nil {
+		t.Fatalf("Upsert 2: %v", err)
+	}
+	// Same lowercase id means the second upsert replaced the first.
+	got, _ := p.EntityList()
+	if len(got) != 1 {
+		t.Errorf("case-insensitive id: expected 1 row, got %d", len(got))
+	}
+}
+
 // TestUpsertStoresRawEmbedsNormalized verifies the dual-state invariant:
 // the stored `drawers.document` column retains the raw caller-supplied
 // string while the embedder sees a normalized form. Under FakeEmbedder

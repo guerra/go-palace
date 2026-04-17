@@ -54,6 +54,10 @@ var ErrSchemaOutdated = errors.New("palace: schema outdated; migration failed")
 // surfaces misuse rather than silently corrupting partition semantics.
 var ErrDedupCrossPartition = errors.New("palace: dedup partition mismatch")
 
+// ErrEntityNotFound is returned by entity-table operations when the target
+// row does not exist OR when the caller supplies an empty Name.
+var ErrEntityNotFound = errors.New("palace: entity not found")
+
 // allowedWhereKeys is the allowlist of columns Get may filter on.
 // Used to prevent SQL injection via dynamic column names.
 var allowedWhereKeys = map[string]string{
@@ -537,4 +541,111 @@ func (p *Palace) CountWhere(where map[string]string) (int, error) {
 func ComputeDrawerID(wing, room, sourceFile string, chunkIndex int) string {
 	sum := sha256.Sum256([]byte(sourceFile + strconv.Itoa(chunkIndex)))
 	return fmt.Sprintf("drawer_%s_%s_%s", wing, room, hex.EncodeToString(sum[:])[:24])
+}
+
+// EntityRow is the persisted shape of a pkg/entity.Registry entry. Kept
+// here (not in pkg/entity) so palace remains the single sqlite-aware
+// package; pkg/entity.PalaceStore converts between the two struct shapes.
+// AliasesJSON is a JSON-encoded []string; palace treats it as opaque text.
+type EntityRow struct {
+	Name            string    `json:"name"`
+	Type            string    `json:"type"`
+	Canonical       string    `json:"canonical"`
+	AliasesJSON     string    `json:"aliases_json"`
+	FirstSeen       time.Time `json:"first_seen"`
+	LastSeen        time.Time `json:"last_seen"`
+	OccurrenceCount int       `json:"occurrence_count"`
+}
+
+// EntityUpsert inserts or replaces a row in the entities table. The row's
+// lowercase Name is used as the primary key so Lookups stay
+// case-insensitive. An empty Name returns ErrEntityNotFound.
+func (p *Palace) EntityUpsert(row EntityRow) error {
+	if row.Name == "" {
+		return fmt.Errorf("%w: empty name", ErrEntityNotFound)
+	}
+	id := strings.ToLower(row.Name)
+	aliases := row.AliasesJSON
+	if aliases == "" {
+		aliases = "[]"
+	}
+	tx, err := p.db.Begin()
+	if err != nil {
+		return fmt.Errorf("palace: entity upsert begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.Exec(
+		`INSERT OR REPLACE INTO entities
+         (id, name, type, canonical, aliases_json, first_seen, last_seen, occurrence_count)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, row.Name, row.Type, row.Canonical, aliases,
+		row.FirstSeen.UTC().Format(time.RFC3339Nano),
+		row.LastSeen.UTC().Format(time.RFC3339Nano),
+		row.OccurrenceCount,
+	)
+	if err != nil {
+		return fmt.Errorf("palace: entity upsert exec: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("palace: entity upsert commit: %w", err)
+	}
+	return nil
+}
+
+// EntityList returns every row in the entities table, ordered by name.
+func (p *Palace) EntityList() ([]EntityRow, error) {
+	rows, err := p.db.Query(
+		`SELECT name, type, canonical, aliases_json, first_seen, last_seen, occurrence_count
+         FROM entities ORDER BY name`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("palace: entity list query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []EntityRow
+	for rows.Next() {
+		var (
+			row                 EntityRow
+			firstSeen, lastSeen string
+		)
+		if err := rows.Scan(
+			&row.Name, &row.Type, &row.Canonical, &row.AliasesJSON,
+			&firstSeen, &lastSeen, &row.OccurrenceCount,
+		); err != nil {
+			return nil, fmt.Errorf("palace: entity list scan: %w", err)
+		}
+		if firstSeen != "" {
+			t, err := time.Parse(time.RFC3339Nano, firstSeen)
+			if err != nil {
+				return nil, fmt.Errorf("palace: entity list first_seen parse: %w", err)
+			}
+			row.FirstSeen = t
+		}
+		if lastSeen != "" {
+			t, err := time.Parse(time.RFC3339Nano, lastSeen)
+			if err != nil {
+				return nil, fmt.Errorf("palace: entity list last_seen parse: %w", err)
+			}
+			row.LastSeen = t
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("palace: entity list rows: %w", err)
+	}
+	return out, nil
+}
+
+// EntityDelete removes the row whose lowercase Name matches. Idempotent:
+// deleting a missing row returns nil (mirrors MemoryStore semantics).
+func (p *Palace) EntityDelete(name string) error {
+	if name == "" {
+		return fmt.Errorf("%w: empty name", ErrEntityNotFound)
+	}
+	id := strings.ToLower(name)
+	if _, err := p.db.Exec(`DELETE FROM entities WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("palace: entity delete: %w", err)
+	}
+	return nil
 }
