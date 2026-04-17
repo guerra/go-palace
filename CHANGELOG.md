@@ -32,6 +32,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `entities` table added to the palace schema. `schema_version` bumped
   from 2 to 3. v2 palaces auto-migrate additively on next `palace.Open()`
   (no vec rebuild, no data transform, no backup).
+- `pkg/extractor` package: 5-type heuristic classifier (decision,
+  preference, milestone, problem, emotion) ported from Python
+  `general_extractor.py`. Exposes `Extract(content) []Classification`,
+  `ExtractWith(content, opts)`, `ExtractSegments(content, opts) []Segment`,
+  and `Classify(segment, opts)`. Pure Go, no ML, no network. Marker
+  regex sets ported verbatim from Python; confidence formula and
+  disambiguation rules match the oracle.
+- `palace.PalaceOptions` struct + `palace.OpenWithOptions(path, emb, opts)`
+  constructor. `DefaultPalaceOptions()` returns
+  `PalaceOptions{ExtractOnUpsert: true}`, so the existing `Open` path
+  gains automatic classification on every Upsert / UpsertBatch:
+  classifications are written under `Drawer.Metadata["classifications"]`
+  as `[]extractor.Classification`. Opt out via `OpenWithOptions`.
+- `palace.QueryOptions.Classification` filter: semantic search can now be
+  restricted to drawers whose classifications include a specific type.
+  Backed by `json_each` / `json_extract` over `drawers.metadata_json`.
 
 ### Changed
 - `drawers` table: new `hall TEXT NOT NULL DEFAULT ''` column.
@@ -41,12 +57,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `palace.Palace.UpsertBatch` now normalizes documents via `normalize.Normalize` before calling the embedder. Stored `drawers.document` remains the raw caller-supplied string (dual-state: stored raw, embedded normalized). Existing drawers are unaffected unless re-embedded.
 - `mempalace dedup --threshold` now takes cosine **SIMILARITY** (default 0.95) instead of cosine **DISTANCE** (default 0.15). Users passing `--threshold 0.15` must update to `--threshold 0.85` for the equivalent strictness. A runtime warning fires when `--threshold < 0.5` to catch stale invocations.
 - `mempalace dedup` gains `--hall <name>` and `--merge` flags. `--merge` collapses loser metadata into the surviving (longest) drawer via `palace.MergeAndDelete`.
+- `palace.Upsert` / `palace.UpsertBatch` may mutate `Drawer.Metadata` in
+  place when `PalaceOptions.ExtractOnUpsert` is enabled (adds the
+  `classifications` key; all other keys are preserved). Callers sensitive
+  to in-place mutation pass deep-copied drawers.
+- `internal/convominer` migrates from `internal/extractor.ExtractMemories`
+  to `pkg/extractor.ExtractSegments`. Convo chunks classified with type
+  "emotional" previously are now typed "emotion" (see Breaking).
 
 ### Removed
 - `internal/dedup` package — lifted to `pkg/dedup`. CLI callers migrated.
+- `internal/extractor` package — lifted to `pkg/extractor`. All
+  internal consumers migrated (`internal/convominer`).
 
 ### Breaking
 - Existing v0.1.0 databases auto-migrate on first `palace.Open()` with the v0.2.0 binary. A file-copy backup is created at `<path>.pre-v0.2.bak` before destructive vec-table rebuild. Re-embedding every drawer is O(N) embedder calls — expensive on large palaces.
 - Callers using `palace.Drawer` struct literals are source-compatible (all in-tree callers use keyed literals), but any external code using positional initialization will break.
 - `palace_meta` table now carries a `schema_version` key. External readers should treat it as opaque.
 - `mempalace dedup --threshold` semantic flip (similarity, not distance) — see Changed above.
+- The `"emotional"` memory-type string is renamed to `"emotion"` on every
+  Go API boundary: the public `pkg/extractor` type constant
+  (`TypeEmotion = "emotion"`), the `Chunk.MemoryType` string produced by
+  `convominer` in `general` mode, the `classifications` entries written
+  to drawer metadata, AND the drawer `room` value for
+  emotional-classified convominer drawers (convominer sets
+  `room = chunk.MemoryType` in general mode). The Python oracle retains
+  `"emotional"`. Drawers mined prior to gp-4 keep whatever strings were
+  originally written (including `room = "emotional"`). Consumers
+  filtering `room == "emotional"` against a palace with a mix of pre-gp-4
+  and post-gp-4 drawers must broaden the filter (e.g.,
+  `room IN ("emotional", "emotion")`) or re-mine. No automatic DB-level
+  rename is performed.
+- `palace.Open` now implicitly enables auto-classification on every
+  `Upsert` / `UpsertBatch` (via `DefaultPalaceOptions().ExtractOnUpsert =
+  true`). Existing callers see a new `classifications` key appear in
+  `Drawer.Metadata` after the next Upsert. Callers iterating metadata
+  keys must tolerate unknown keys (the type is already `map[string]any`).
+  Opt out via `palace.OpenWithOptions(..., palace.PalaceOptions{
+  ExtractOnUpsert: false})`.

@@ -1,6 +1,7 @@
 package palace_test
 
 import (
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/guerra/go-palace/pkg/embed"
+	"github.com/guerra/go-palace/pkg/extractor"
 	"github.com/guerra/go-palace/pkg/palace"
 )
 
@@ -523,5 +525,161 @@ func TestUpsertStoresRawEmbedsNormalized(t *testing.T) {
 			t.Errorf("expected similarity ~1.0 for both normalize-equivalent docs, "+
 				"got id=%s sim=%f", r.Drawer.ID, r.Similarity)
 		}
+	}
+}
+
+// classificationsFromMetadata round-trips the metadata payload back through
+// json into the typed slice the extractor produces. The on-disk storage is
+// JSON text, so after Get the value in Metadata["classifications"] is
+// []any of map[string]any — callers asserting typed access must re-decode.
+func classificationsFromMetadata(t *testing.T, m map[string]any) []extractor.Classification {
+	t.Helper()
+	raw, ok := m[extractor.MetadataKey]
+	if !ok {
+		return nil
+	}
+	buf, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal metadata[%q]: %v", extractor.MetadataKey, err)
+	}
+	var cs []extractor.Classification
+	if err := json.Unmarshal(buf, &cs); err != nil {
+		t.Fatalf("unmarshal classifications: %v", err)
+	}
+	return cs
+}
+
+func TestUpsertAutoClassify(t *testing.T) {
+	p := openTest(t)
+	d := makeDrawer("test", "knowledge", "test-room", "t.md", 0,
+		"We decided to go with Postgres because of JSONB. The reason is reliability.")
+	if err := p.Upsert(d); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, err := p.Get(palace.GetOptions{Where: map[string]string{"source_file": "t.md"}})
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d drawers, want 1", len(got))
+	}
+	cs := classificationsFromMetadata(t, got[0].Metadata)
+	if len(cs) == 0 {
+		t.Fatalf("no classifications in metadata: %+v", got[0].Metadata)
+	}
+	if cs[0].Type != extractor.TypeDecision {
+		t.Errorf("type = %q, want %q", cs[0].Type, extractor.TypeDecision)
+	}
+}
+
+func TestUpsertExtractOnUpsertDisabled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "p.db")
+	p, err := palace.OpenWithOptions(path,
+		embed.NewFakeEmbedder(palace.DefaultEmbeddingDim),
+		palace.PalaceOptions{ExtractOnUpsert: false})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	d := makeDrawer("test", "knowledge", "test-room", "t.md", 0,
+		"We decided to go with Postgres because of JSONB. The reason is reliability.")
+	if err := p.Upsert(d); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, err := p.Get(palace.GetOptions{Where: map[string]string{"source_file": "t.md"}})
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d drawers, want 1", len(got))
+	}
+	if _, has := got[0].Metadata[extractor.MetadataKey]; has {
+		t.Errorf("classifications unexpectedly present: %+v", got[0].Metadata)
+	}
+}
+
+func TestMetadataPreservedOnReupsert(t *testing.T) {
+	p := openTest(t)
+	doc := "We decided to go with Postgres because of JSONB. The reason is reliability."
+
+	d1 := makeDrawer("test", "knowledge", "test-room", "t.md", 0, doc)
+	d1.Metadata = map[string]any{"user_tag": "foo"}
+	if err := p.Upsert(d1); err != nil {
+		t.Fatalf("upsert 1: %v", err)
+	}
+
+	// Re-upsert (same ID): caller supplies preset user_tag again — we
+	// assert the auto-classify logic preserves it on THIS call.
+	d2 := makeDrawer("test", "knowledge", "test-room", "t.md", 0, doc)
+	d2.Metadata = map[string]any{"user_tag": "foo"}
+	if err := p.Upsert(d2); err != nil {
+		t.Fatalf("upsert 2: %v", err)
+	}
+
+	got, err := p.Get(palace.GetOptions{Where: map[string]string{"source_file": "t.md"}})
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d drawers, want 1", len(got))
+	}
+	if got[0].Metadata["user_tag"] != "foo" {
+		t.Errorf("user_tag = %v, want %q", got[0].Metadata["user_tag"], "foo")
+	}
+	cs := classificationsFromMetadata(t, got[0].Metadata)
+	if len(cs) == 0 {
+		t.Errorf("classifications missing after re-upsert: %+v", got[0].Metadata)
+	}
+}
+
+func TestQueryFilterByClassification(t *testing.T) {
+	p := openTest(t)
+	decisionDoc := "We decided to go with Postgres because of JSONB. The reason is reliability."
+	problemDoc := "The bug keeps crashing on CI. The root cause is unclear and the build is broken."
+	neutralDoc := "The weather is nice today, just ordinary prose with no markers present anywhere."
+
+	drawers := []palace.Drawer{
+		makeDrawer("w", "knowledge", "r", "dec1.md", 0, decisionDoc),
+		makeDrawer("w", "knowledge", "r", "dec2.md", 0, decisionDoc+" Also framework choice."),
+		makeDrawer("w", "knowledge", "r", "prob1.md", 0, problemDoc),
+		makeDrawer("w", "knowledge", "r", "prob2.md", 0, problemDoc+" Another error."),
+		makeDrawer("w", "knowledge", "r", "neutral.md", 0, neutralDoc),
+	}
+	if err := p.UpsertBatch(drawers); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	// Decision filter → 2 results.
+	res, err := p.Query("Postgres reliability", palace.QueryOptions{
+		Classification: extractor.TypeDecision,
+		NResults:       10,
+	})
+	if err != nil {
+		t.Fatalf("query decision: %v", err)
+	}
+	if len(res) != 2 {
+		t.Errorf("decision filter: got %d results, want 2", len(res))
+	}
+
+	// No filter → 5 results.
+	all, err := p.Query("Postgres reliability", palace.QueryOptions{NResults: 10})
+	if err != nil {
+		t.Fatalf("query all: %v", err)
+	}
+	if len(all) != 5 {
+		t.Errorf("no filter: got %d results, want 5", len(all))
+	}
+
+	// Milestone filter → 0 results.
+	mile, err := p.Query("Postgres reliability", palace.QueryOptions{
+		Classification: extractor.TypeMilestone,
+		NResults:       10,
+	})
+	if err != nil {
+		t.Fatalf("query milestone: %v", err)
+	}
+	if len(mile) != 0 {
+		t.Errorf("milestone filter: got %d results, want 0", len(mile))
 	}
 }

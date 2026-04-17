@@ -10,13 +10,43 @@ import (
 	vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
 )
 
+// classificationOverFetchMultiplier controls how many extra drawers sqlite-vec
+// returns when QueryOptions.Classification is set. `classifications` lives in
+// drawers.metadata_json (not on drawers_vec as a partition key), so the filter
+// cannot be pushed into the KNN search — it runs as a post-filter on the
+// vec-returned rows. To keep the caller's NResults roughly honored when the
+// top-k candidates are not classification-dense, we over-fetch, post-filter,
+// then slice to NResults. Bound by classificationOverFetchMax to keep latency
+// predictable on huge palaces. This does NOT guarantee NResults — a palace
+// with few classified drawers can still under-serve the caller — but it closes
+// the "top-5 happen to be other classifications, return 0" foot-gun.
+const (
+	classificationOverFetchMultiplier = 20
+	classificationOverFetchMax        = 1000
+)
+
 // Query runs a semantic search. It embeds text once then asks sqlite-vec for
 // the top N matches, joining metadata from the drawers table. Similarity is
 // computed as 1 - distance to match mempalace/searcher.py:75.
+//
+// When QueryOptions.Classification is non-empty, Query over-fetches from
+// sqlite-vec (up to 20×NResults, capped at 1000) because the classification
+// filter runs as a post-filter on drawers.metadata_json rather than as a vec
+// partition key. Fewer than NResults may still return if the palace holds
+// fewer classified drawers than requested.
 func (p *Palace) Query(text string, opts QueryOptions) ([]SearchResult, error) {
 	n := opts.NResults
 	if n <= 0 {
 		n = 5
+	}
+	// k is the vec-table KNN bound. For a classification filter, over-fetch
+	// so the post-filter has enough candidates to usually honor NResults.
+	k := n
+	if opts.Classification != "" {
+		k = n * classificationOverFetchMultiplier
+		if k > classificationOverFetchMax {
+			k = classificationOverFetchMax
+		}
 	}
 	vecs, err := p.embedder.Embed([]string{text})
 	if err != nil {
@@ -40,7 +70,7 @@ func (p *Palace) Query(text string, opts QueryOptions) ([]SearchResult, error) {
               FROM drawers_vec v
               INNER JOIN drawers d ON d.id = v.id
               WHERE v.embedding MATCH ? AND k = ?`
-	args := []any{blob, n}
+	args := []any{blob, k}
 	if opts.Wing != "" {
 		query += " AND v.wing = ?"
 		args = append(args, opts.Wing)
@@ -52,6 +82,13 @@ func (p *Palace) Query(text string, opts QueryOptions) ([]SearchResult, error) {
 	if opts.Room != "" {
 		query += " AND v.room = ?"
 		args = append(args, opts.Room)
+	}
+	if opts.Classification != "" {
+		query += ` AND EXISTS (
+            SELECT 1 FROM json_each(d.metadata_json, '$.classifications') je
+            WHERE json_extract(je.value, '$.type') = ?
+        )`
+		args = append(args, string(opts.Classification))
 	}
 	query += " ORDER BY v.distance"
 
@@ -71,6 +108,10 @@ func (p *Palace) Query(text string, opts QueryOptions) ([]SearchResult, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("palace: query rows: %w", err)
+	}
+	// Trim post-filter overflow back to the caller's NResults.
+	if opts.Classification != "" && len(out) > n {
+		out = out[:n]
 	}
 	return out, nil
 }

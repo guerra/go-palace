@@ -20,6 +20,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/guerra/go-palace/pkg/embed"
+	"github.com/guerra/go-palace/pkg/extractor"
 	"github.com/guerra/go-palace/pkg/normalize"
 )
 
@@ -75,6 +76,22 @@ type Palace struct {
 	embedder embed.Embedder
 	path     string
 	dim      int
+	opts     PalaceOptions
+}
+
+// PalaceOptions configures palace behavior at Open time. Zero-value defaults
+// are tuned for typical prose-heavy workflows.
+type PalaceOptions struct {
+	// ExtractOnUpsert, when true, auto-classifies every Upsert into
+	// drawer metadata under extractor.MetadataKey. Defaults to true via
+	// DefaultPalaceOptions. Disable for bulk-load flows ingesting
+	// non-prose content.
+	ExtractOnUpsert bool
+}
+
+// DefaultPalaceOptions returns the default options used by Open.
+func DefaultPalaceOptions() PalaceOptions {
+	return PalaceOptions{ExtractOnUpsert: true}
 }
 
 // Drawer is one stored memory cell. ID is deterministic via ComputeDrawerID.
@@ -114,22 +131,33 @@ type GetOptions struct {
 
 // QueryOptions controls a semantic Query call. Wing, Hall and Room restrict
 // results; empty strings mean "no filter". NResults <= 0 defaults to 5.
+// Classification, when non-empty, restricts results to drawers whose
+// metadata_json "classifications" array contains at least one entry with
+// matching type.
 type QueryOptions struct {
-	Wing     string
-	Hall     string
-	Room     string
-	NResults int
+	Wing           string
+	Hall           string
+	Room           string
+	Classification extractor.ClassificationType
+	NResults       int
 }
 
 func init() { vec.Auto() }
 
 // Open opens (or creates) the sqlite-vec database at path, applies the
-// schema, and returns a ready-to-use Palace. The embedder is stored for
-// later Upsert / Query calls. The embedder's dimension is validated
-// against any previously stored dimension — a mismatch is rejected at
-// Open so callers don't discover it via a cryptic sqlite-vec BLOB-length
-// error on first insert.
+// schema, and returns a ready-to-use Palace with DefaultPalaceOptions
+// (ExtractOnUpsert=true). The embedder is stored for later Upsert / Query
+// calls. The embedder's dimension is validated against any previously
+// stored dimension — a mismatch is rejected at Open so callers don't
+// discover it via a cryptic sqlite-vec BLOB-length error on first insert.
 func Open(path string, e embed.Embedder) (*Palace, error) {
+	return OpenWithOptions(path, e, DefaultPalaceOptions())
+}
+
+// OpenWithOptions is Open with caller-supplied PalaceOptions. Use this to
+// disable ExtractOnUpsert for bulk-load workflows that do not want
+// per-drawer classification overhead.
+func OpenWithOptions(path string, e embed.Embedder, opts PalaceOptions) (*Palace, error) {
 	if e == nil {
 		return nil, fmt.Errorf("%w: nil embedder", ErrEmbedder)
 	}
@@ -172,7 +200,7 @@ func Open(path string, e embed.Embedder) (*Palace, error) {
 			return nil, fmt.Errorf("palace: write dim: %w", err)
 		}
 	}
-	return &Palace{db: db, embedder: e, path: path, dim: embDim}, nil
+	return &Palace{db: db, embedder: e, path: path, dim: embDim, opts: opts}, nil
 }
 
 // Close releases the underlying database. It is safe to call multiple times.
@@ -191,10 +219,27 @@ func (p *Palace) Upsert(d Drawer) error {
 	return p.UpsertBatch([]Drawer{d})
 }
 
-// UpsertBatch inserts or replaces many drawers atomically.
+// UpsertBatch inserts or replaces many drawers atomically. When
+// PalaceOptions.ExtractOnUpsert is true (the default), this mutates each
+// Drawer.Metadata in place to add a "classifications" entry keyed on
+// extractor.MetadataKey — callers sensitive to in-place mutation should
+// pass deep copies. Mutation is deferred until AFTER the embedder call
+// succeeds: if Embed fails, the caller's Drawer.Metadata is untouched.
 func (p *Palace) UpsertBatch(ds []Drawer) error {
 	if len(ds) == 0 {
 		return nil
+	}
+	// Classify upfront (reading raw ds[i].Document — markers depend on
+	// original casing and punctuation that Normalize may alter) but hold
+	// results in a local slice. They are merged into Drawer.Metadata ONLY
+	// after Embed returns successfully, so embedder errors leave caller
+	// state untouched.
+	var classifications [][]extractor.Classification
+	if p.opts.ExtractOnUpsert {
+		classifications = make([][]extractor.Classification, len(ds))
+		for i := range ds {
+			classifications[i] = extractor.Extract(ds[i].Document)
+		}
 	}
 	// Embed all documents in one call for efficiency. Documents are
 	// normalized before embedding so incidental whitespace / CRLF / Unicode
@@ -208,6 +253,18 @@ func (p *Palace) UpsertBatch(ds []Drawer) error {
 	vecs, err := p.embedder.Embed(docs)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrEmbedder, err)
+	}
+	// Embed succeeded — safe to merge classifications into caller Metadata.
+	if p.opts.ExtractOnUpsert {
+		for i := range ds {
+			if len(classifications[i]) == 0 {
+				continue
+			}
+			if ds[i].Metadata == nil {
+				ds[i].Metadata = make(map[string]any, 1)
+			}
+			ds[i].Metadata[extractor.MetadataKey] = classifications[i]
+		}
 	}
 	if len(vecs) != len(ds) {
 		return fmt.Errorf("%w: embedder returned %d vecs for %d docs",

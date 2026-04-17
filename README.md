@@ -42,12 +42,13 @@ pkg/                    Public API — importable by consumers
   searcher/             Semantic search
   layers/               L0-L3 memory stack
   kg/                   Knowledge graph (subject-predicate-object)
+  entity/               Entity detection + registry
+  extractor/            5-type heuristic classifier (decision / preference / milestone / problem / emotion) — pure-Go port of Python general_extractor.py
   sanitizer/            Input sanitization
 internal/               Private implementation
   miner/                Project file mining (worker pool, gitignore)
   convominer/           Conversation mining
   normalize/            Chat format normalization (Claude/Codex/ChatGPT/Slack)
-  extractor/            5-type heuristic memory extraction
   dialect/              AAAK dialect encoder/decoder
   graph/                Palace graph traversal
   entity/               Entity detection + registry

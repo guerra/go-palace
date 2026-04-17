@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/guerra/go-palace/internal/extractor"
 	"github.com/guerra/go-palace/internal/normalize"
+	"github.com/guerra/go-palace/pkg/extractor"
 	"github.com/guerra/go-palace/pkg/halls"
 	"github.com/guerra/go-palace/pkg/palace"
 )
@@ -375,12 +375,19 @@ func MineConvos(opts ConvoMineOptions, p *palace.Palace) error {
 		var chunks []Chunk
 
 		if opts.ExtractMode == "general" {
-			memories := extractor.ExtractMemories(content, 0.3)
-			for _, m := range memories {
+			// Use the segment's source position for ChunkIndex (s.Classification.Index),
+			// NOT a local counter — this keeps drawer IDs stable across re-mines
+			// when classification output shifts (ComputeDrawerID hashes
+			// sourceFile + chunkIndex and is used for upsert identity).
+			segs := extractor.ExtractSegments(content, extractor.ExtractorOptions{MinConfidence: 0.3})
+			for _, s := range segs {
+				if s.Classification.Type == "" {
+					continue
+				}
 				chunks = append(chunks, Chunk{
-					Content:    m.Content,
-					ChunkIndex: m.ChunkIndex,
-					MemoryType: m.MemoryType,
+					Content:    s.Content,
+					ChunkIndex: s.Classification.Index,
+					MemoryType: string(s.Classification.Type),
 				})
 			}
 		} else {
