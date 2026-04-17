@@ -13,7 +13,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/guerra/go-palace/internal/convominer"
-	"github.com/guerra/go-palace/internal/dedup"
 	"github.com/guerra/go-palace/internal/dialect"
 	"github.com/guerra/go-palace/internal/entity"
 	"github.com/guerra/go-palace/internal/hooks"
@@ -24,6 +23,7 @@ import (
 	"github.com/guerra/go-palace/internal/splitter"
 	mcppkg "github.com/guerra/go-palace/mcp"
 	"github.com/guerra/go-palace/pkg/config"
+	"github.com/guerra/go-palace/pkg/dedup"
 	"github.com/guerra/go-palace/pkg/embed"
 	"github.com/guerra/go-palace/pkg/layers"
 	"github.com/guerra/go-palace/pkg/palace"
@@ -630,7 +630,18 @@ func newDedupCmd() *cobra.Command {
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			threshold, _ := cmd.Flags().GetFloat64("threshold")
 			wing, _ := cmd.Flags().GetString("wing")
+			hallFlag, _ := cmd.Flags().GetString("hall")
 			source, _ := cmd.Flags().GetString("source")
+			mergeFlag, _ := cmd.Flags().GetBool("merge")
+
+			// Threshold unit change (v0.2.0): this flag is now cosine
+			// SIMILARITY (0, 1]. Pre-0.2 used cosine distance. Warn users
+			// who likely carried over the old value.
+			if threshold > 0 && threshold < 0.5 {
+				slog.Warn("mempalace dedup: --threshold is now cosine SIMILARITY (was cosine distance pre-v0.2); "+
+					"a low value means 'match almost everything'. Pass --threshold 0.85 for the equivalent of old --threshold 0.15.",
+					"threshold", threshold)
+			}
 
 			emb, cleanup := buildEmbedder()
 			defer cleanup()
@@ -659,14 +670,19 @@ func newDedupCmd() *cobra.Command {
 			opts := dedup.DedupOptions{
 				SourcePattern: source,
 				Wing:          wing,
+				Hall:          hallFlag,
+				Threshold:     threshold,
+				DryRun:        dryRun,
+				Merge:         mergeFlag,
 			}
-			deleted, err := dedup.Deduplicate(p, threshold, dryRun, opts)
+			report, err := dedup.Run(p, opts)
 			if err != nil {
 				return fmt.Errorf("dedup: %w", err)
 			}
 
 			after, _ := p.Count()
-			fmt.Fprintf(w, "\n  Removed: %d duplicates\n", deleted)
+			fmt.Fprintf(w, "\n  Groups: %d  Kept: %d  Merged: %d  Dropped: %d\n",
+				report.SourcesChecked, report.Kept, report.Merged, report.Dropped)
 			fmt.Fprintf(w, "  Palace after: %d drawers\n", after)
 
 			if dryRun {
@@ -677,9 +693,12 @@ func newDedupCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().Bool("dry-run", false, "preview without deleting")
-	cmd.Flags().Float64("threshold", dedup.DefaultThreshold, "cosine distance threshold")
+	cmd.Flags().Float64("threshold", dedup.DefaultThreshold,
+		"cosine SIMILARITY threshold (0, 1]; higher = stricter match")
 	cmd.Flags().String("wing", "", "scope dedup to a single wing")
+	cmd.Flags().String("hall", "", "scope dedup to a single hall")
 	cmd.Flags().String("source", "", "filter by source file pattern")
+	cmd.Flags().Bool("merge", false, "merge loser metadata into kept winner")
 	return cmd
 }
 

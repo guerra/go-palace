@@ -381,3 +381,53 @@ func TestUpsertRoundtripsHall(t *testing.T) {
 		t.Errorf("hall roundtrip: got %q want %q", got[0].Hall, "tasks")
 	}
 }
+
+// TestUpsertStoresRawEmbedsNormalized verifies the dual-state invariant:
+// the stored `drawers.document` column retains the raw caller-supplied
+// string while the embedder sees a normalized form. Under FakeEmbedder
+// (deterministic byte-hash), two documents that normalize to the same
+// string must yield a cosine similarity of 1.0 when queried, proving the
+// embedder received the identical normalized input.
+func TestUpsertStoresRawEmbedsNormalized(t *testing.T) {
+	p := openTest(t)
+	rawWhitespace := "  hello\n\n\nworld  "
+	preNormalized := "hello\n\nworld"
+
+	d1 := makeDrawer("w", "knowledge", "r", "raw.md", 0, rawWhitespace)
+	d2 := makeDrawer("w", "knowledge", "r", "norm.md", 0, preNormalized)
+	if err := p.UpsertBatch([]palace.Drawer{d1, d2}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	// Stored document for d1 must be the raw caller string, untouched.
+	got, err := p.Get(palace.GetOptions{
+		Where: map[string]string{"source_file": "raw.md"},
+	})
+	if err != nil {
+		t.Fatalf("get raw: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 raw row, got %d", len(got))
+	}
+	if got[0].Document != rawWhitespace {
+		t.Errorf("stored doc was modified: got %q want %q", got[0].Document, rawWhitespace)
+	}
+
+	// Query with the pre-normalized text. Both drawers should return with
+	// similarity 1.0 because both embedded the same Normalize() output.
+	res, err := p.Query(preNormalized, palace.QueryOptions{NResults: 5})
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if len(res) < 2 {
+		t.Fatalf("expected >=2 results, got %d", len(res))
+	}
+	for _, r := range res[:2] {
+		// FakeEmbedder is deterministic hash: identical normalized input
+		// must produce similarity exactly 1.0.
+		if r.Similarity < 0.999999 {
+			t.Errorf("expected similarity ~1.0 for both normalize-equivalent docs, "+
+				"got id=%s sim=%f", r.Drawer.ID, r.Similarity)
+		}
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -19,6 +20,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/guerra/go-palace/pkg/embed"
+	"github.com/guerra/go-palace/pkg/normalize"
 )
 
 // Sentinel errors returned by the palace API.
@@ -45,6 +47,12 @@ var ErrDimensionMismatch = errors.New("palace: dimension mismatch")
 // ErrSchemaOutdated indicates the palace schema is older than this binary
 // expects and the migration attempt failed.
 var ErrSchemaOutdated = errors.New("palace: schema outdated; migration failed")
+
+// ErrDedupCrossPartition is returned by MergeAndDelete when the winner and
+// any loser drawer do not share the same (wing, hall, source_file)
+// partition. Dedup MUST NOT cross partition boundaries — this sentinel
+// surfaces misuse rather than silently corrupting partition semantics.
+var ErrDedupCrossPartition = errors.New("palace: dedup partition mismatch")
 
 // allowedWhereKeys is the allowlist of columns Get may filter on.
 // Used to prevent SQL injection via dynamic column names.
@@ -184,10 +192,14 @@ func (p *Palace) UpsertBatch(ds []Drawer) error {
 	if len(ds) == 0 {
 		return nil
 	}
-	// Embed all documents in one call for efficiency.
+	// Embed all documents in one call for efficiency. Documents are
+	// normalized before embedding so incidental whitespace / CRLF / Unicode
+	// form differences do not fragment the vector space. The raw
+	// caller-supplied string is what upsertOne stores — dual-state: stored
+	// raw, embedded normalized. See pkg/normalize.
 	docs := make([]string, len(ds))
 	for i, d := range ds {
-		docs[i] = d.Document
+		docs[i] = normalize.Normalize(d.Document)
 	}
 	vecs, err := p.embedder.Embed(docs)
 	if err != nil {
@@ -332,6 +344,151 @@ func (p *Palace) Delete(id string) error {
 	}
 	if n == 0 {
 		return ErrNotFound
+	}
+	return nil
+}
+
+// MergeAndDelete atomically merges mergedMeta into the winner drawer's
+// metadata_json and deletes the loserIDs. All loser IDs must share the
+// same (wing, hall, source_file) partition as the winner; any mismatch
+// rolls back and returns ErrDedupCrossPartition.
+//
+// The metadata merge is SHALLOW: keys in mergedMeta overwrite keys in the
+// winner's existing metadata. Callers that need deep-merge semantics must
+// compute the union themselves before calling.
+//
+// A nil / empty loserIDs is a no-op that still applies mergedMeta to the
+// winner's metadata (pass nil mergedMeta for a pure no-op).
+// winnerID == "" returns ErrNotFound; a winnerID that does not exist
+// returns ErrNotFound. Missing loser rows are ignored (warn only).
+func (p *Palace) MergeAndDelete(winnerID string, loserIDs []string, mergedMeta map[string]any) error {
+	if winnerID == "" {
+		return ErrNotFound
+	}
+	tx, err := p.db.Begin()
+	if err != nil {
+		return fmt.Errorf("palace: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var (
+		wWing, wHall, wSrc, wMetaJSON string
+	)
+	row := tx.QueryRow(
+		`SELECT wing, hall, source_file, metadata_json FROM drawers WHERE id = ?`,
+		winnerID,
+	)
+	if err := row.Scan(&wWing, &wHall, &wSrc, &wMetaJSON); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("palace: merge fetch winner: %w", err)
+	}
+
+	// Partition guard: every loser must match winner's (wing, hall, source_file).
+	// Batch the fetch into one IN (...) round-trip — small-group dedup is the
+	// common case but large groups should not pay per-row query overhead.
+	candidateIDs := make([]string, 0, len(loserIDs))
+	seen := map[string]bool{winnerID: true} // dedupe input + skip winner
+	for _, lid := range loserIDs {
+		if lid == "" || seen[lid] {
+			continue
+		}
+		seen[lid] = true
+		candidateIDs = append(candidateIDs, lid)
+	}
+
+	validLosers := make([]string, 0, len(candidateIDs))
+	if len(candidateIDs) > 0 {
+		placeholders := make([]string, len(candidateIDs))
+		args := make([]any, len(candidateIDs))
+		for i, id := range candidateIDs {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		rows, err := tx.Query(
+			`SELECT id, wing, hall, source_file FROM drawers WHERE id IN (`+
+				strings.Join(placeholders, ",")+`)`, args...,
+		)
+		if err != nil {
+			return fmt.Errorf("palace: merge fetch losers: %w", err)
+		}
+		loserInfo := make(map[string][3]string, len(candidateIDs))
+		for rows.Next() {
+			var lid, lWing, lHall, lSrc string
+			if err := rows.Scan(&lid, &lWing, &lHall, &lSrc); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("palace: merge scan loser: %w", err)
+			}
+			loserInfo[lid] = [3]string{lWing, lHall, lSrc}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("palace: merge loser rows: %w", err)
+		}
+		_ = rows.Close()
+
+		for _, lid := range candidateIDs {
+			info, ok := loserInfo[lid]
+			if !ok {
+				// Missing loser — skip silently. Dedup may race with other
+				// writers; an absent loser is simply already-gone.
+				continue
+			}
+			if info[0] != wWing || info[1] != wHall || info[2] != wSrc {
+				return fmt.Errorf("%w: winner=(%s,%s,%s) loser %s=(%s,%s,%s)",
+					ErrDedupCrossPartition, wWing, wHall, wSrc, lid, info[0], info[1], info[2])
+			}
+			validLosers = append(validLosers, lid)
+		}
+	}
+
+	// Shallow merge mergedMeta over winner metadata.
+	if len(mergedMeta) > 0 {
+		winnerMeta := map[string]any{}
+		if wMetaJSON != "" {
+			if err := json.Unmarshal([]byte(wMetaJSON), &winnerMeta); err != nil {
+				return fmt.Errorf("palace: parse winner metadata: %w", err)
+			}
+		}
+		for k, v := range mergedMeta {
+			winnerMeta[k] = v
+		}
+		newMeta, err := json.Marshal(winnerMeta)
+		if err != nil {
+			return fmt.Errorf("palace: marshal merged metadata: %w", err)
+		}
+		if _, err := tx.Exec(
+			`UPDATE drawers SET metadata_json = ? WHERE id = ?`,
+			string(newMeta), winnerID,
+		); err != nil {
+			return fmt.Errorf("palace: update winner metadata: %w", err)
+		}
+	}
+
+	// Batch delete losers from both tables.
+	if len(validLosers) > 0 {
+		placeholders := make([]string, len(validLosers))
+		args := make([]any, len(validLosers))
+		for i, id := range validLosers {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		in := strings.Join(placeholders, ",")
+		if _, err := tx.Exec(
+			`DELETE FROM drawers WHERE id IN (`+in+`)`, args...,
+		); err != nil {
+			return fmt.Errorf("palace: delete losers drawers: %w", err)
+		}
+		if _, err := tx.Exec(
+			`DELETE FROM drawers_vec WHERE id IN (`+in+`)`, args...,
+		); err != nil {
+			return fmt.Errorf("palace: delete losers vec: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("palace: commit merge: %w", err)
 	}
 	return nil
 }
