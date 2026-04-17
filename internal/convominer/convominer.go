@@ -16,6 +16,7 @@ import (
 
 	"github.com/guerra/go-palace/internal/extractor"
 	"github.com/guerra/go-palace/internal/normalize"
+	"github.com/guerra/go-palace/pkg/halls"
 	"github.com/guerra/go-palace/pkg/palace"
 )
 
@@ -468,6 +469,7 @@ func MineConvos(opts ConvoMineOptions, p *palace.Palace) error {
 				ID:         palace.ComputeDrawerID(wing, chunkRoom, sourceFile, c.ChunkIndex),
 				Document:   c.Content,
 				Wing:       wing,
+				Hall:       halls.HallConversations,
 				Room:       chunkRoom,
 				SourceFile: sourceFile,
 				ChunkIndex: c.ChunkIndex,

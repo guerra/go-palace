@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/guerra/go-palace/pkg/embed"
+	"github.com/guerra/go-palace/pkg/halls"
 	"github.com/guerra/go-palace/pkg/palace"
 )
 
@@ -320,6 +321,7 @@ func buildAndRetrieve(
 		drawers[i] = palace.Drawer{
 			ID:       corpusIDs[i],
 			Document: doc,
+			Hall:     halls.HallConversations,
 		}
 	}
 

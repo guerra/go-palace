@@ -32,12 +32,13 @@ func upsertOne(tx *sql.Tx, d Drawer, vector []float32) error {
 
 	if _, err := tx.Exec(
 		`INSERT INTO drawers (
-            id, document, wing, room, source_file, chunk_index,
+            id, document, wing, hall, room, source_file, chunk_index,
             added_by, filed_at, source_mtime, metadata_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             document      = excluded.document,
             wing          = excluded.wing,
+            hall          = excluded.hall,
             room          = excluded.room,
             source_file   = excluded.source_file,
             chunk_index   = excluded.chunk_index,
@@ -45,7 +46,7 @@ func upsertOne(tx *sql.Tx, d Drawer, vector []float32) error {
             filed_at      = excluded.filed_at,
             source_mtime  = excluded.source_mtime,
             metadata_json = excluded.metadata_json`,
-		d.ID, d.Document, d.Wing, d.Room, d.SourceFile, d.ChunkIndex,
+		d.ID, d.Document, d.Wing, d.Hall, d.Room, d.SourceFile, d.ChunkIndex,
 		d.AddedBy, filedAt.Format(time.RFC3339Nano), d.SourceMTime, string(metaBytes),
 	); err != nil {
 		return fmt.Errorf("palace: upsert drawers row: %w", err)
@@ -62,9 +63,9 @@ func upsertOne(tx *sql.Tx, d Drawer, vector []float32) error {
 		return fmt.Errorf("palace: serialize vector: %w", err)
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO drawers_vec (id, wing, room, source_file, embedding)
-         VALUES (?, ?, ?, ?, ?)`,
-		d.ID, d.Wing, d.Room, d.SourceFile, blob,
+		`INSERT INTO drawers_vec (id, wing, hall, room, source_file, embedding)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+		d.ID, d.Wing, d.Hall, d.Room, d.SourceFile, blob,
 	); err != nil {
 		return fmt.Errorf("palace: insert vec row: %w", err)
 	}
@@ -83,7 +84,7 @@ func scanDrawer(rows *sql.Rows) (Drawer, error) {
 		mtime    sql.NullFloat64
 	)
 	if err := rows.Scan(
-		&d.ID, &d.Document, &d.Wing, &d.Room, &d.SourceFile,
+		&d.ID, &d.Document, &d.Wing, &d.Hall, &d.Room, &d.SourceFile,
 		&d.ChunkIndex, &d.AddedBy, &filedAt, &mtime, &metaJSON,
 	); err != nil {
 		return d, fmt.Errorf("palace: scan: %w", err)

@@ -15,6 +15,7 @@ import (
 
 	"github.com/guerra/go-palace/internal/normalize"
 	"github.com/guerra/go-palace/internal/room"
+	"github.com/guerra/go-palace/pkg/halls"
 	"github.com/guerra/go-palace/pkg/palace"
 )
 
@@ -187,6 +188,7 @@ func Mine(opts MineOptions, p *palace.Palace) error {
 				ID:          palace.ComputeDrawerID(wing, roomName, src, c.Index),
 				Document:    c.Content,
 				Wing:        wing,
+				Hall:        halls.Detect(c.Content, roomName, opts.Agent, nil),
 				Room:        roomName,
 				SourceFile:  src,
 				ChunkIndex:  c.Index,

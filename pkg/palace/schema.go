@@ -19,12 +19,18 @@ import (
 //
 // This matches the constructor scenarios in sqlite-vec v0.1.6
 // (sqlite-vec.c scenarios 1-4).
+//
+// v0.2: adds hall column on drawers (4th-tier taxonomy) and hall partition
+// key on drawers_vec. For LEGACY databases where drawers already exists, the
+// IF NOT EXISTS guard means these statements are no-ops — migrateToV2 in
+// migration.go performs the ALTER + vec rebuild.
 func schemaStatements(dim int) []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS drawers (
         id TEXT PRIMARY KEY,
         document TEXT NOT NULL,
         wing TEXT NOT NULL,
+        hall TEXT NOT NULL DEFAULT '',
         room TEXT NOT NULL,
         source_file TEXT NOT NULL,
         chunk_index INTEGER NOT NULL,
@@ -38,6 +44,7 @@ func schemaStatements(dim int) []string {
 		fmt.Sprintf(`CREATE VIRTUAL TABLE IF NOT EXISTS drawers_vec USING vec0(
         id text primary key,
         wing text partition key,
+        hall text partition key,
         room text partition key,
         source_file text partition key,
         embedding float[%d]
@@ -48,6 +55,10 @@ func schemaStatements(dim int) []string {
     )`,
 	}
 }
+
+// schemaVersionCurrent is the schema_version written by this binary on every
+// successful Open() against either a fresh or freshly-migrated palace.
+const schemaVersionCurrent = 2
 
 // readStoredDim reads the embedding dimension from the palace_meta table.
 // Returns (dim, true, nil) if found, (0, false, nil) if the table or key
@@ -81,15 +92,31 @@ func writeStoredDim(db *sql.DB, dim int) error {
 	return err
 }
 
-// migrate applies all DDL statements. It does NOT wrap in a transaction
-// because sqlite-vec virtual table creation cannot be nested inside a
-// user transaction — CREATE VIRTUAL TABLE allocates a shadow table and
-// must commit outside any BEGIN.
-func migrate(db *sql.DB, dim int) error {
-	for i, stmt := range schemaStatements(dim) {
-		if _, err := db.Exec(stmt); err != nil {
-			return fmt.Errorf("palace: migrate stmt %d: %w", i, err)
+// readSchemaVersion reads schema_version from palace_meta. Mirrors readStoredDim.
+func readSchemaVersion(db *sql.DB) (int, bool, error) {
+	var val string
+	err := db.QueryRow(`SELECT value FROM palace_meta WHERE key = 'schema_version'`).Scan(&val)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, false, nil
 		}
+		if strings.Contains(err.Error(), "no such table") {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("palace: read schema_version: %w", err)
 	}
-	return nil
+	v, err := strconv.Atoi(val)
+	if err != nil {
+		return 0, false, fmt.Errorf("palace: bad schema_version %q: %w", val, err)
+	}
+	return v, true, nil
+}
+
+// writeSchemaVersion writes schema_version to palace_meta.
+func writeSchemaVersion(db *sql.DB, v int) error {
+	_, err := db.Exec(
+		`INSERT OR REPLACE INTO palace_meta (key, value) VALUES ('schema_version', ?)`,
+		strconv.Itoa(v),
+	)
+	return err
 }

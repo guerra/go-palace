@@ -34,7 +34,7 @@ func (p *Palace) Query(text string, opts QueryOptions) ([]SearchResult, error) {
 		return nil, fmt.Errorf("palace: serialize query vector: %w", err)
 	}
 
-	query := `SELECT d.id, d.document, d.wing, d.room, d.source_file,
+	query := `SELECT d.id, d.document, d.wing, d.hall, d.room, d.source_file,
                      d.chunk_index, d.added_by, d.filed_at, d.source_mtime,
                      d.metadata_json, v.distance
               FROM drawers_vec v
@@ -44,6 +44,10 @@ func (p *Palace) Query(text string, opts QueryOptions) ([]SearchResult, error) {
 	if opts.Wing != "" {
 		query += " AND v.wing = ?"
 		args = append(args, opts.Wing)
+	}
+	if opts.Hall != "" {
+		query += " AND v.hall = ?"
+		args = append(args, opts.Hall)
 	}
 	if opts.Room != "" {
 		query += " AND v.room = ?"
@@ -80,7 +84,7 @@ func scanSearchResult(rows *sql.Rows) (SearchResult, error) {
 		distance float64
 	)
 	if err := rows.Scan(
-		&d.ID, &d.Document, &d.Wing, &d.Room, &d.SourceFile,
+		&d.ID, &d.Document, &d.Wing, &d.Hall, &d.Room, &d.SourceFile,
 		&d.ChunkIndex, &d.AddedBy, &filedAt, &mtime,
 		&metaJSON, &distance,
 	); err != nil {

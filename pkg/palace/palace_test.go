@@ -22,11 +22,12 @@ func openTest(t *testing.T) *palace.Palace {
 	return p
 }
 
-func makeDrawer(wing, room, src string, chunk int, doc string) palace.Drawer {
+func makeDrawer(wing, hall, room, src string, chunk int, doc string) palace.Drawer {
 	return palace.Drawer{
 		ID:         palace.ComputeDrawerID(wing, room, src, chunk),
 		Document:   doc,
 		Wing:       wing,
+		Hall:       hall,
 		Room:       room,
 		SourceFile: src,
 		ChunkIndex: chunk,
@@ -60,9 +61,9 @@ func TestOpenNilEmbedder(t *testing.T) {
 func TestUpsertAndCount(t *testing.T) {
 	p := openTest(t)
 	drawers := []palace.Drawer{
-		makeDrawer("myproj", "docs", "a.md", 0, "alpha content"),
-		makeDrawer("myproj", "docs", "a.md", 1, "beta content"),
-		makeDrawer("other", "code", "b.go", 0, "gamma content"),
+		makeDrawer("myproj", "knowledge", "docs", "a.md", 0, "alpha content"),
+		makeDrawer("myproj", "knowledge", "docs", "a.md", 1, "beta content"),
+		makeDrawer("other", "knowledge", "code", "b.go", 0, "gamma content"),
 	}
 	if err := p.UpsertBatch(drawers); err != nil {
 		t.Fatalf("upsert batch: %v", err)
@@ -101,9 +102,9 @@ func TestCountWhereRejectsUnknownKey(t *testing.T) {
 func TestGetByWhere(t *testing.T) {
 	p := openTest(t)
 	in := []palace.Drawer{
-		makeDrawer("w", "r", "a.md", 0, "zero"),
-		makeDrawer("w", "r", "a.md", 1, "one"),
-		makeDrawer("w", "r", "b.md", 0, "other file"),
+		makeDrawer("w", "knowledge", "r", "a.md", 0, "zero"),
+		makeDrawer("w", "knowledge", "r", "a.md", 1, "one"),
+		makeDrawer("w", "knowledge", "r", "b.md", 0, "other file"),
 	}
 	if err := p.UpsertBatch(in); err != nil {
 		t.Fatalf("upsert: %v", err)
@@ -139,7 +140,7 @@ func TestGetWhereRejectsUnknownKey(t *testing.T) {
 
 func TestDelete(t *testing.T) {
 	p := openTest(t)
-	d := makeDrawer("w", "r", "a.md", 0, "content")
+	d := makeDrawer("w", "knowledge", "r", "a.md", 0, "content")
 	if err := p.Upsert(d); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
@@ -163,7 +164,7 @@ func TestQuerySemanticOrder(t *testing.T) {
 	docs := []string{"alpha", "beta", "gamma", "delta", "epsilon"}
 	var drawers []palace.Drawer
 	for i, doc := range docs {
-		drawers = append(drawers, makeDrawer("w", "r", "f.md", i, doc))
+		drawers = append(drawers, makeDrawer("w", "knowledge", "r", "f.md", i, doc))
 	}
 	if err := p.UpsertBatch(drawers); err != nil {
 		t.Fatalf("upsert: %v", err)
@@ -187,9 +188,9 @@ func TestQuerySemanticOrder(t *testing.T) {
 func TestQueryWingFilter(t *testing.T) {
 	p := openTest(t)
 	drawers := []palace.Drawer{
-		makeDrawer("A", "r1", "a.md", 0, "lorem"),
-		makeDrawer("A", "r1", "a.md", 1, "ipsum"),
-		makeDrawer("B", "r2", "b.md", 0, "dolor"),
+		makeDrawer("A", "knowledge", "r1", "a.md", 0, "lorem"),
+		makeDrawer("A", "knowledge", "r1", "a.md", 1, "ipsum"),
+		makeDrawer("B", "knowledge", "r2", "b.md", 0, "dolor"),
 	}
 	if err := p.UpsertBatch(drawers); err != nil {
 		t.Fatalf("upsert: %v", err)
@@ -234,8 +235,8 @@ func TestPersistenceAcrossClose(t *testing.T) {
 		t.Fatalf("open1: %v", err)
 	}
 	if err := p1.UpsertBatch([]palace.Drawer{
-		makeDrawer("w", "r", "a.md", 0, "one"),
-		makeDrawer("w", "r", "a.md", 1, "two"),
+		makeDrawer("w", "knowledge", "r", "a.md", 0, "one"),
+		makeDrawer("w", "knowledge", "r", "a.md", 1, "two"),
 	}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
@@ -288,7 +289,7 @@ func TestOpenSameDimensionSucceeds(t *testing.T) {
 
 func TestUpsertReplacesRow(t *testing.T) {
 	p := openTest(t)
-	d := makeDrawer("w", "r", "a.md", 0, "initial")
+	d := makeDrawer("w", "knowledge", "r", "a.md", 0, "initial")
 	if err := p.Upsert(d); err != nil {
 		t.Fatalf("upsert1: %v", err)
 	}
@@ -309,5 +310,74 @@ func TestUpsertReplacesRow(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Document != "updated" {
 		t.Errorf("replace failed: %+v", got)
+	}
+}
+
+func TestQueryHallFilter(t *testing.T) {
+	p := openTest(t)
+	drawers := []palace.Drawer{
+		makeDrawer("w", "conversations", "r", "a.md", 0, "alpha chat"),
+		makeDrawer("w", "conversations", "r", "a.md", 1, "beta chat"),
+		makeDrawer("w", "diary", "r", "b.md", 0, "diary entry"),
+	}
+	if err := p.UpsertBatch(drawers); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	res, err := p.Query("x", palace.QueryOptions{Hall: "conversations", NResults: 10})
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if len(res) == 0 {
+		t.Fatal("no results with hall filter")
+	}
+	for _, r := range res {
+		if r.Drawer.Hall != "conversations" {
+			t.Errorf("hall leak: %q", r.Drawer.Hall)
+		}
+	}
+}
+
+func TestGetByHallWhere(t *testing.T) {
+	p := openTest(t)
+	in := []palace.Drawer{
+		makeDrawer("w", "knowledge", "r", "a.md", 0, "zero"),
+		makeDrawer("w", "diary", "r", "b.md", 0, "one"),
+		makeDrawer("w", "diary", "r", "b.md", 1, "two"),
+	}
+	if err := p.UpsertBatch(in); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, err := p.Get(palace.GetOptions{
+		Where: map[string]string{"hall": "diary"},
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d, want 2", len(got))
+	}
+	for _, d := range got {
+		if d.Hall != "diary" {
+			t.Errorf("hall mismatch: %q", d.Hall)
+		}
+	}
+}
+
+func TestUpsertRoundtripsHall(t *testing.T) {
+	p := openTest(t)
+	d := makeDrawer("w", "tasks", "r", "a.md", 0, "plan X")
+	if err := p.Upsert(d); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	got, err := p.Get(palace.GetOptions{Where: map[string]string{"source_file": "a.md"}})
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(got))
+	}
+	if got[0].Hall != "tasks" {
+		t.Errorf("hall roundtrip: got %q want %q", got[0].Hall, "tasks")
 	}
 }

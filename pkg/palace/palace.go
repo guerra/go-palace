@@ -42,10 +42,15 @@ const DefaultEmbeddingDim = 384
 // the dimension stored in an existing palace.
 var ErrDimensionMismatch = errors.New("palace: dimension mismatch")
 
+// ErrSchemaOutdated indicates the palace schema is older than this binary
+// expects and the migration attempt failed.
+var ErrSchemaOutdated = errors.New("palace: schema outdated; migration failed")
+
 // allowedWhereKeys is the allowlist of columns Get may filter on.
 // Used to prevent SQL injection via dynamic column names.
 var allowedWhereKeys = map[string]string{
 	"wing":        "wing",
+	"hall":        "hall",
 	"room":        "room",
 	"source_file": "source_file",
 	"added_by":    "added_by",
@@ -62,10 +67,13 @@ type Palace struct {
 
 // Drawer is one stored memory cell. ID is deterministic via ComputeDrawerID.
 // Metadata carries any extra key-value pairs that do not fit the typed fields.
+// Hall is the 4th-tier taxonomy bucket (see pkg/halls). Empty string is
+// legal (legacy rows), but new code should set it via halls.Detect.
 type Drawer struct {
 	ID          string
 	Document    string
 	Wing        string
+	Hall        string
 	Room        string
 	SourceFile  string
 	ChunkIndex  int
@@ -92,10 +100,11 @@ type GetOptions struct {
 	Offset int
 }
 
-// QueryOptions controls a semantic Query call. Wing and Room restrict
+// QueryOptions controls a semantic Query call. Wing, Hall and Room restrict
 // results; empty strings mean "no filter". NResults <= 0 defaults to 5.
 type QueryOptions struct {
 	Wing     string
+	Hall     string
 	Room     string
 	NResults int
 }
@@ -129,7 +138,7 @@ func Open(path string, e embed.Embedder) (*Palace, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("palace: enable WAL: %w", err)
 	}
-	if err := migrate(db, embDim); err != nil {
+	if err := migrate(db, embDim, path, e); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -229,7 +238,7 @@ func (p *Palace) Get(opts GetOptions) ([]Drawer, error) {
 		args = append(args, v)
 	}
 
-	query := `SELECT id, document, wing, room, source_file, chunk_index,
+	query := `SELECT id, document, wing, hall, room, source_file, chunk_index,
                 added_by, filed_at, source_mtime, metadata_json
               FROM drawers`
 	if len(clauses) > 0 {
@@ -278,7 +287,7 @@ func (p *Palace) GetByIDs(ids []string) ([]Drawer, error) {
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	query := `SELECT id, document, wing, room, source_file, chunk_index,
+	query := `SELECT id, document, wing, hall, room, source_file, chunk_index,
                 added_by, filed_at, source_mtime, metadata_json
               FROM drawers WHERE id IN (` + strings.Join(placeholders, ",") + `)
               ORDER BY wing, room, source_file, chunk_index`
