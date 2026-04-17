@@ -41,7 +41,8 @@ pkg/                    Public API — importable by consumers
   embed/                Embedder interface (Hugot, Fake)
   searcher/             Semantic search
   layers/               L0-L3 memory stack
-  kg/                   Knowledge graph (subject-predicate-object)
+  kg/                   Knowledge graph (subject-predicate-object) + heuristic triple auto-extract (6 verb families)
+  repair/               Palace health audits — orphan scan, WAL integrity check, embedding dim mismatch; report-only or auto-delete
   entity/               Entity detection + registry
   extractor/            5-type heuristic classifier (decision / preference / milestone / problem / emotion) — pure-Go port of Python general_extractor.py
   sanitizer/            Input sanitization

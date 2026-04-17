@@ -20,6 +20,11 @@ const (
 	HallScratch       = "scratch"
 )
 
+// HallArchived is a transitional hall value used by Compact to mark cold
+// drawers. It is intentionally NOT part of All and IsValid returns false for
+// it — archive is a lifecycle state, not a canonical classification.
+const HallArchived = "archived"
+
 // All lists every valid hall, in canonical order.
 var All = []string{
 	HallConversations,

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -59,6 +60,12 @@ var ErrDedupCrossPartition = errors.New("palace: dedup partition mismatch")
 // row does not exist OR when the caller supplies an empty Name.
 var ErrEntityNotFound = errors.New("palace: entity not found")
 
+// ErrInvalidOptions is returned by OpenWithOptions when the caller supplies
+// a self-inconsistent PalaceOptions — e.g. AutoExtractKG=true without KG,
+// EntityRegistry, or AutoExtractFn wired. Fail-fast so silent no-op
+// extraction does not slip past a first integration.
+var ErrInvalidOptions = errors.New("palace: invalid options")
+
 // allowedWhereKeys is the allowlist of columns Get may filter on.
 // Used to prevent SQL injection via dynamic column names.
 var allowedWhereKeys = map[string]string{
@@ -87,11 +94,80 @@ type PalaceOptions struct {
 	// DefaultPalaceOptions. Disable for bulk-load flows ingesting
 	// non-prose content.
 	ExtractOnUpsert bool
+
+	// AutoExtractKG, when true, invokes AutoExtractFn after every
+	// successful UpsertBatch commit to emit triples into KG. Requires KG,
+	// EntityRegistry, and AutoExtractFn to be non-nil — any nil disables
+	// extraction for that Upsert. Defaults to false. KG write failures
+	// are logged but do NOT fail the Upsert (palace is the source of
+	// truth; KG is opportunistic).
+	AutoExtractKG bool
+
+	// KG is the triple sink to receive auto-extracted triples. Typically
+	// set to kg.NewPalaceAdapter(k). Unused unless AutoExtractKG is true.
+	KG TripleSink
+
+	// EntityRegistry detects entities in drawer content to anchor triple
+	// extraction. Typically an in-process wrapper over pkg/entity.Detect.
+	// Palace accepts an INTERFACE (not a concrete *entity.Registry) so
+	// pkg/palace does NOT import pkg/entity. Unused unless AutoExtractKG
+	// is true.
+	EntityRegistry EntityDetector
+
+	// AutoExtractFn pulls triples out of a drawer given its detected
+	// entities. Typically set to kg.AutoExtractTriples. Unused unless
+	// AutoExtractKG is true. Caller-supplied so pkg/palace imports
+	// nothing from pkg/kg (cycle-break).
+	AutoExtractFn func(Drawer, []EntityMatch) []TripleRow
+
+	// TrackLastAccessed, when true, causes Query to UPDATE
+	// metadata_json.$.last_accessed on every returned drawer id in a
+	// single transaction. Defaults to false — turning it on by default
+	// would silently mutate state on every existing Query call across
+	// unchanged callers. Enable when using Compact with last-access
+	// cold detection; otherwise Compact falls back to filed_at.
+	TrackLastAccessed bool
 }
 
 // DefaultPalaceOptions returns the default options used by Open.
 func DefaultPalaceOptions() PalaceOptions {
 	return PalaceOptions{ExtractOnUpsert: true}
+}
+
+// TripleSink is the write side of a knowledge graph exposed to palace.
+// Implemented by kg.NewPalaceAdapter(k). Defining the contract here keeps
+// pkg/palace from importing pkg/kg — the sole cycle-break between the two.
+type TripleSink interface {
+	AddTriple(row TripleRow) (string, error)
+}
+
+// TripleRow is the palace-local shape of a knowledge graph triple. Fields
+// mirror kg.Triple; the adapter in pkg/kg converts row → kg.Triple.
+type TripleRow struct {
+	Subject      string
+	Predicate    string
+	Object       string
+	ValidFrom    string
+	Confidence   float64
+	SourceCloset string
+}
+
+// EntityDetector runs entity detection on a content string. Implemented by
+// caller-supplied wrappers over pkg/entity (kg.NewStatelessEntityDetector).
+// The interface lives here so pkg/palace does not import pkg/entity.
+type EntityDetector interface {
+	DetectEntities(content string) []EntityMatch
+}
+
+// EntityMatch mirrors the subset of pkg/entity.Entity fields needed for
+// triple extraction. Offset is a BYTE offset such that
+// content[Offset:Offset+len(Name)] == Name.
+type EntityMatch struct {
+	Name       string
+	Type       string
+	Canonical  string
+	Confidence float64
+	Offset     int
 }
 
 // Drawer is one stored memory cell. ID is deterministic via ComputeDrawerID.
@@ -164,6 +240,20 @@ func OpenWithOptions(path string, e embed.Embedder, opts PalaceOptions) (*Palace
 	embDim := e.Dimension()
 	if embDim <= 0 {
 		return nil, fmt.Errorf("%w: embedder dim %d invalid", ErrEmbedder, embDim)
+	}
+	// AutoExtractKG is a cross-field contract: enabling it without any of
+	// KG / EntityRegistry / AutoExtractFn would silently no-op extraction
+	// on every UpsertBatch. Fail fast at Open so misconfig surfaces before
+	// writes accumulate.
+	if opts.AutoExtractKG {
+		switch {
+		case opts.KG == nil:
+			return nil, fmt.Errorf("%w: AutoExtractKG=true requires KG sink", ErrInvalidOptions)
+		case opts.EntityRegistry == nil:
+			return nil, fmt.Errorf("%w: AutoExtractKG=true requires EntityRegistry", ErrInvalidOptions)
+		case opts.AutoExtractFn == nil:
+			return nil, fmt.Errorf("%w: AutoExtractKG=true requires AutoExtractFn", ErrInvalidOptions)
+		}
 	}
 	db, err := sql.Open("sqlite3", path)
 	if err != nil {
@@ -291,6 +381,28 @@ func (p *Palace) UpsertBatch(ds []Drawer) error {
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("palace: commit: %w", err)
+	}
+
+	// KG auto-extract runs AFTER successful commit so a KG failure cannot
+	// roll back the palace write (palace is source of truth; KG is
+	// opportunistic). Each triple add failure is logged and skipped.
+	if p.opts.AutoExtractKG &&
+		p.opts.KG != nil &&
+		p.opts.EntityRegistry != nil &&
+		p.opts.AutoExtractFn != nil {
+		for _, d := range ds {
+			ents := p.opts.EntityRegistry.DetectEntities(d.Document)
+			if len(ents) == 0 {
+				continue
+			}
+			rows := p.opts.AutoExtractFn(d, ents)
+			for _, r := range rows {
+				if _, err := p.opts.KG.AddTriple(r); err != nil {
+					slog.Warn("palace: kg auto-extract add_triple",
+						"drawer_id", d.ID, "err", err)
+				}
+			}
+		}
 	}
 	return nil
 }

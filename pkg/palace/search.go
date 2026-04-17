@@ -8,6 +8,8 @@ import (
 	"time"
 
 	vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
+
+	"github.com/guerra/go-palace/pkg/halls"
 )
 
 // classificationOverFetchMultiplier controls how many extra drawers sqlite-vec
@@ -64,13 +66,20 @@ func (p *Palace) Query(text string, opts QueryOptions) ([]SearchResult, error) {
 		return nil, fmt.Errorf("palace: serialize query vector: %w", err)
 	}
 
+	// Archived drawers are EXCLUDED from semantic Query by default. Compact
+	// sets drawers.hall='archived' but leaves drawers_vec.hall on the
+	// original partition (no per-row re-embed), so filtering on v.hall alone
+	// would let archived rows leak into unfiltered searches — we filter on
+	// d.hall instead. Callers who need to read archived rows use Get, which
+	// bypasses the vec table entirely.
 	query := `SELECT d.id, d.document, d.wing, d.hall, d.room, d.source_file,
                      d.chunk_index, d.added_by, d.filed_at, d.source_mtime,
                      d.metadata_json, v.distance
               FROM drawers_vec v
               INNER JOIN drawers d ON d.id = v.id
-              WHERE v.embedding MATCH ? AND k = ?`
-	args := []any{blob, k}
+              WHERE v.embedding MATCH ? AND k = ?
+                AND d.hall != ?`
+	args := []any{blob, k, halls.HallArchived}
 	if opts.Wing != "" {
 		query += " AND v.wing = ?"
 		args = append(args, opts.Wing)
@@ -96,22 +105,40 @@ func (p *Palace) Query(text string, opts QueryOptions) ([]SearchResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("palace: query: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
 
 	var out []SearchResult
 	for rows.Next() {
 		res, err := scanSearchResult(rows)
 		if err != nil {
+			_ = rows.Close()
 			return nil, err
 		}
 		out = append(out, res)
 	}
 	if err := rows.Err(); err != nil {
+		_ = rows.Close()
 		return nil, fmt.Errorf("palace: query rows: %w", err)
+	}
+	// Close rows explicitly so a later TouchLastAccessed write tx does not
+	// race the reader for the same connection.
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("palace: query close: %w", err)
 	}
 	// Trim post-filter overflow back to the caller's NResults.
 	if opts.Classification != "" && len(out) > n {
 		out = out[:n]
+	}
+	// Opt-in last_accessed tracking. Runs AFTER rows.Close (defer above) so
+	// the write tx does not contend with an open read cursor. Failures are
+	// advisory — a bump miss never fails a search.
+	if p.opts.TrackLastAccessed && len(out) > 0 {
+		ids := make([]string, len(out))
+		for i, r := range out {
+			ids[i] = r.Drawer.ID
+		}
+		if err := p.TouchLastAccessed(ids); err != nil {
+			slog.Warn("palace: touch last_accessed failed", "err", err)
+		}
 	}
 	return out, nil
 }

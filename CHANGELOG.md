@@ -48,6 +48,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `palace.QueryOptions.Classification` filter: semantic search can now be
   restricted to drawers whose classifications include a specific type.
   Backed by `json_each` / `json_extract` over `drawers.metadata_json`.
+- `pkg/kg/extract.go` exports `AutoExtractTriples(drawer, entities) []palace.TripleRow`
+  and a `VerbPatterns` table of 6 heuristic verb families
+  (`works_at`, `lives_in`, `uses`, `prefers`, `started`, `finished`) anchored
+  on detected entities with configurable subject/object type allowlists.
+  Emits triples with `DefaultExtractConfidence = 0.6` and
+  `ValidFrom = drawer.FiledAt` (YYYY-MM-DD). English-only MVP; non-English
+  surface forms are out of scope.
+- `kg.NewPalaceAdapter(k)` returning a `palace.TripleSink` adapter for
+  wiring pkg/kg into palace without creating an import cycle.
+- `kg.NewStatelessEntityDetector()` convenience `palace.EntityDetector`
+  that wraps `entity.Detect` as a pure function (no shared state).
+- `palace.TripleSink` interface (`AddTriple(TripleRow) (string, error)`)
+  and `palace.TripleRow` struct. Defined on the palace side so
+  `pkg/palace` imports nothing from `pkg/kg` (cycle-break).
+- `palace.EntityDetector` interface (`DetectEntities(content) []EntityMatch`)
+  and `palace.EntityMatch` struct. Mirrors pkg/entity fields needed for
+  triple extraction without palace importing pkg/entity.
+- `palace.PalaceOptions` gains `AutoExtractKG`, `KG`, `EntityRegistry`,
+  `AutoExtractFn`, and `TrackLastAccessed` fields. All default to the
+  zero value so existing behavior is unchanged (opt-in only).
+- `(*palace.Palace).TouchLastAccessed(ids)` — batch UPDATE of
+  `metadata_json.$.last_accessed` via `json_set`. Used by `Query` when
+  `TrackLastAccessed=true` and by tests.
+- `(*palace.Palace).ColdDrawerIDs(before, limit, protectedHalls)` —
+  selects ids where `COALESCE(metadata_json.$.last_accessed, filed_at) < ?`
+  with hall-based exclusion.
+- `(*palace.Palace).ArchiveDrawers(ids)` — UPDATE hall to
+  `halls.HallArchived`. Vec partition hall is intentionally not rewritten;
+  `Query` compensates by filtering on `d.hall != 'archived'` so archived
+  drawers stop surfacing in semantic search unconditionally. `Get` still
+  returns archived rows (bypasses the vec table).
+- `(*palace.Palace).DeleteBatch(ids)` — atomic batched DELETE across
+  drawers + drawers_vec in a single transaction. Mirrors `ArchiveDrawers`
+  shape; used by `Compact(Action=ActionDelete)` so delete and archive
+  paths share the same O(batch) fsync profile.
+- `(*palace.Palace).IntegrityCheck()` / `QuickCheck()` — runs
+  `PRAGMA integrity_check` / `quick_check`, returns rows != `"ok"`.
+- `(*palace.Palace).ScanOrphans()` — returns drawer-without-vec and
+  vec-without-drawer id lists from a read-tx snapshot.
+- `(*palace.Palace).DeleteOrphans(drawerOrphans, vecOrphans)` — atomic
+  DELETE with in-tx re-verification to avoid WAL races.
+- `(*palace.Palace).EmbeddingDim()` / `ProbeEmbedderDim()` — typed
+  accessors for stored-vs-embedder dim comparison.
+- `pkg/palace/compact.go` exports `Compact`, `CompactOptions`,
+  `CompactReport`, `CompactAction`. Defaults: `ColdDays=30`,
+  `Action=ActionArchive`, `ProtectedHalls=[HallDiary, HallKnowledge]`,
+  `MaxBatch=1000`. Action supports `ActionArchive` (hall='archived') and
+  `ActionDelete` (removes drawers + vec rows).
+- `pkg/repair` NEW package exporting `Repair`, `RepairOptions`,
+  `RepairReport`, `RepairMode`, `DimInfo`. Orchestrates integrity check
+  (skippable), orphan scan, and dim probe. `ModeReportOnly` (default) is
+  read-only; `ModeAutoDelete` removes orphans only (integrity/dim issues
+  stay read-only).
+- `halls.HallArchived = "archived"` constant. Intentionally NOT in
+  `halls.All` and `halls.IsValid` returns false for it — archive is a
+  lifecycle state, not a canonical hall.
 
 ### Changed
 - `drawers` table: new `hall TEXT NOT NULL DEFAULT ''` column.
@@ -64,6 +120,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `internal/convominer` migrates from `internal/extractor.ExtractMemories`
   to `pkg/extractor.ExtractSegments`. Convo chunks classified with type
   "emotional" previously are now typed "emotion" (see Breaking).
+- `palace.Query` can now bump `metadata_json.$.last_accessed` on every
+  returned drawer id when `PalaceOptions.TrackLastAccessed=true`. OFF by
+  default to preserve v0.1 read-only Query semantics; required for
+  `Compact` to use last-access cold detection (Compact falls back to
+  `filed_at` when the option is off). Bump failures are logged and
+  ignored — they never fail a Query.
+- `palace.UpsertBatch` now invokes `PalaceOptions.AutoExtractFn` after a
+  successful tx commit when `AutoExtractKG`, `KG`, `EntityRegistry`, and
+  `AutoExtractFn` are all set. Triple write failures are logged and do
+  NOT roll back the palace write (palace is source of truth; KG is
+  opportunistic).
+- **v0.2.0 is now feature-complete** — gp-1 (halls) + gp-2
+  (normalize+dedup) + gp-3 (entity) + gp-4 (extractor) + gp-5
+  (kg-extract, compact, pkg/repair).
 
 ### Removed
 - `internal/dedup` package — lifted to `pkg/dedup`. CLI callers migrated.

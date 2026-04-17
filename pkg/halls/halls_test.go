@@ -130,3 +130,19 @@ func TestAll_Exhaustiveness(t *testing.T) {
 		seen[h] = true
 	}
 }
+
+func TestHallArchivedNotValid(t *testing.T) {
+	if halls.HallArchived != "archived" {
+		t.Errorf("HallArchived = %q; want %q", halls.HallArchived, "archived")
+	}
+	if halls.IsValid(halls.HallArchived) {
+		t.Errorf("IsValid(%q) = true; want false (archived is a transition state, not a canonical hall)",
+			halls.HallArchived)
+	}
+	// Archived must be excluded from All.
+	for _, h := range halls.All {
+		if h == halls.HallArchived {
+			t.Errorf("All contains HallArchived; archive is a transition state and must stay out of All")
+		}
+	}
+}
